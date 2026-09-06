@@ -1,0 +1,33 @@
+namespace: aknochow
+name: cursor
+version: 0.1.0
+readme: README.md
+authors:
+  - Adam Knochowski <aknochow@redhat.com>
+description: Ansible modules for running Cursor agents via the official cursor-sdk (Cursor Pro API key, local or cloud later).
+license:
+  - GPL-3.0-or-later
+  - Apache-2.0
+repository: https://github.com/aknochow/ansible-cursor
+tags:
+  - cursor
+  - grok
+  - ai
+  - llm
+  - agent
+dependencies: {}
+build_ignore:
+  - .git
+  - .github
+  - .agents
+  - .claude
+  - .ansible
+  - .ansible-lint
+  - .gitignore
+  - .pre-commit-config.yaml
+  - .pytest_cache
+  - .venv
+  - .yamllint
+  - __pycache__
+  - "*.egg-info"
+  - tests
