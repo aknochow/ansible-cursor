@@ -8,3 +8,8 @@ __pycache__/
 artifacts/
 *.egg-info/
 .ruff_cache/
+.env
+.env.*
+!.env.example
+.DS_Store
+

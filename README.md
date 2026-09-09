@@ -28,7 +28,7 @@ export CURSOR_API_KEY=...   # Dashboard → Integrations; never print this
 
 ## Known limits (measured 2026-09-06)
 
-See `ansible-ai-handoffs/cursor-grok-capability-spike-2026-09-06.md`.
+Measured against a private 2026-09-06 capability spike; notes are not in this repository.
 
 - **No generation-time JSON Schema.** `structured_tool` is a custom tool the
   model *may* call. Assert on `structured` in the playbook, the same way
