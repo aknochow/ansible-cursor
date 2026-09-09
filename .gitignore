@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.tar.gz
+.tox/
+.venv/
+artifacts/
+*.egg-info/
+.ruff_cache/
+.env
+.env.*
+!.env.example
+.DS_Store
+
