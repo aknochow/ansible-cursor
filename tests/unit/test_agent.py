@@ -125,11 +125,11 @@ class TestMain:
                 self.input_schema = input_schema
 
         mock_sdk.CustomTool = FakeCustomTool
-        mock_sdk.AgentOptions = lambda **kwargs: SimpleNamespace(**kwargs)
-        mock_sdk.LocalAgentOptions = lambda **kwargs: SimpleNamespace(**kwargs)
-        mock_sdk.ModelSelection = lambda **kwargs: SimpleNamespace(**kwargs)
-        mock_sdk.ModelParameterValue = lambda **kwargs: SimpleNamespace(**kwargs)
-        mock_sdk.AgentDefinition = lambda **kwargs: SimpleNamespace(**kwargs)
+        mock_sdk.AgentOptions = SimpleNamespace
+        mock_sdk.LocalAgentOptions = SimpleNamespace
+        mock_sdk.ModelSelection = SimpleNamespace
+        mock_sdk.ModelParameterValue = SimpleNamespace
+        mock_sdk.AgentDefinition = SimpleNamespace
 
         prompt_options = []
 

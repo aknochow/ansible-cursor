@@ -169,16 +169,22 @@ usage_normalized:
   returned: always
   contains:
     input_tokens:
+      description: Prompt tokens consumed by the run.
       type: int
     output_tokens:
+      description: Completion tokens produced by the run.
       type: int
     cache_read_tokens:
+      description: Tokens read from cache.
       type: int
     cache_write_tokens:
+      description: Tokens written to cache.
       type: int
     thinking_tokens:
+      description: Reasoning tokens, mapped from the SDK reasoning_tokens field.
       type: int
     total_tokens:
+      description: Total tokens for the run, or input plus output when omitted.
       type: int
 structured:
   description: Arguments of the last O(structured_tool) call, when one happened.
