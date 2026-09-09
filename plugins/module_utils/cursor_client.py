@@ -6,6 +6,11 @@ from typing import Any
 
 from ansible.module_utils.basic import env_fallback
 
+# SDK Bridge.launch default is 30s. Nested Cursor-agent sessions have
+# SIGKILL'd the vendor node and left wedged bridges; 120s is bring-up
+# only, not a generation budget.
+DEFAULT_BRIDGE_TIMEOUT = 120.0
+
 PROVIDER_ARGSPEC = dict(
     api_key=dict(
         type="str",

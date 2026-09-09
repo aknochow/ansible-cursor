@@ -98,6 +98,15 @@ options:
       - Initial conversation mode.
     type: str
     choices: [agent, plan]
+  bridge_timeout:
+    description:
+      - Seconds to wait for C(cursor-sdk-bridge ready) on stderr. The SDK
+        default is 30; this module waits 120 because a nested Cursor-agent
+        session can SIGKILL the vendor node or leave a wedged bridge that
+        then misses a short discovery window. Not a generation or tool-turn
+        budget.
+    type: float
+    default: 120
 extends_documentation_fragment:
   - aknochow.cursor.auth
 """
@@ -207,6 +216,7 @@ effort_param:
 
 from ansible.module_utils.basic import AnsibleModule
 from ansible_collections.aknochow.cursor.plugins.module_utils.cursor_client import (
+    DEFAULT_BRIDGE_TIMEOUT,
     PROVIDER_ARGSPEC,
     flatten_run,
     resolve_tools,
@@ -312,6 +322,7 @@ def main():
         agents=dict(type="dict"),
         setting_sources=dict(type="list", elements="str", default=[]),
         mode=dict(type="str", choices=["agent", "plan"]),
+        bridge_timeout=dict(type="float", default=DEFAULT_BRIDGE_TIMEOUT),
     )
     argument_spec.update(PROVIDER_ARGSPEC)
 
@@ -325,6 +336,7 @@ def main():
             Agent,
             AgentDefinition,
             AgentOptions,
+            Client,
             CursorAgentError,
             LocalAgentOptions,
             ModelParameterValue,
@@ -347,14 +359,29 @@ def main():
         return
 
     captured = captured_or_err
+    client = None
     try:
-        result = Agent.prompt(module.params["prompt"], options)
+        # Own the bridge: workspace is the caller cwd (the repo under
+        # review), not ansible-playbook's process cwd. close() reaps the
+        # vendor node on both success and start failure.
+        client = Client.launch_bridge(
+            workspace=module.params["cwd"],
+            timeout=module.params.get("bridge_timeout") or DEFAULT_BRIDGE_TIMEOUT,
+            allow_api_key_env_fallback=True,
+        )
+        result = Agent.prompt(module.params["prompt"], options, client=client)
     except CursorAgentError as err:
         module.fail_json(msg=f"Cursor agent failed to start: {err}")
         return
     except Exception as err:  # noqa: BLE001 — surface unexpected SDK errors to Ansible
         module.fail_json(msg=f"Cursor agent raised: {err}")
         return
+    finally:
+        if client is not None:
+            try:
+                client.close()
+            except Exception:  # noqa: BLE001 — never mask the run result
+                pass
 
     status = getattr(result, "status", None)
     status_s = status if isinstance(status, str) else str(status)

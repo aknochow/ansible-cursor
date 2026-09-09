@@ -14,8 +14,9 @@ options:
     type: str
   cwd:
     description:
-      - Working directory for a local agent. Always set explicitly; the SDK
-        otherwise silently creates a local agent against the process cwd.
+      - Working directory for a local agent, and the workspace passed to
+        C(Client.launch_bridge). Always set explicitly; the SDK default
+        client otherwise binds the vendor node to ansible-playbook's cwd.
     type: path
     required: true
 """

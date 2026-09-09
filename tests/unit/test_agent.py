@@ -137,10 +137,14 @@ class TestMain:
 
         prompt_options = []
 
-        def fake_prompt(prompt, options):
+        fake_client = MagicMock()
+        mock_sdk.Client.launch_bridge.return_value = fake_client
+
+        def fake_prompt(prompt, options, client=None):
             prompt_options.append(options)
-            if sdk_error:
-                raise sdk_error
+            fake_module.prompt_client = client
+            if sdk_error is not None:
+                raise mock_sdk.CursorAgentError(str(sdk_error))
             structured = params.get("structured_tool")
             if structured and getattr(options, "local", None) and getattr(options.local, "custom_tools", None):
                 tool = next(iter(options.local.custom_tools.values()))
@@ -153,6 +157,8 @@ class TestMain:
 
         monkeypatch.setitem(sys.modules, "cursor_sdk", mock_sdk)
         fake_module.prompt_options = prompt_options
+        fake_module.sdk = mock_sdk
+        fake_module.bridge_client = fake_client
         return agent_module, fake_module
 
     def test_finished_text_only(self, monkeypatch):
@@ -193,6 +199,12 @@ class TestMain:
         assert kwargs["text"] == "pong"
         assert kwargs["usage_normalized"]["input_tokens"] == 10
         fake_module.fail_json.assert_not_called()
+        fake_module.sdk.Client.launch_bridge.assert_called_once()
+        launch_kwargs = fake_module.sdk.Client.launch_bridge.call_args.kwargs
+        assert launch_kwargs["workspace"] == "/tmp"
+        assert launch_kwargs["timeout"] == 120.0
+        assert fake_module.prompt_client is fake_module.bridge_client
+        fake_module.bridge_client.close.assert_called_once()
 
     def test_structured_tool_captures_args(self, monkeypatch):
         result = SimpleNamespace(
@@ -378,3 +390,23 @@ class TestMain:
         assert "xhigh" in fake_module.fail_json.call_args.kwargs["msg"]
         fake_module.exit_json.assert_not_called()
         assert fake_module.prompt_options == []
+        fake_module.sdk.Client.launch_bridge.assert_not_called()
+
+    def test_closes_client_when_prompt_raises(self, monkeypatch):
+        params = self._base_params()
+        agent_module, fake_module = self._install(
+            monkeypatch, params, self._finished(), sdk_error="Timed out waiting for bridge discovery"
+        )
+        agent_module.main()
+        fake_module.fail_json.assert_called_once()
+        assert "failed to start" in fake_module.fail_json.call_args.kwargs["msg"]
+        fake_module.bridge_client.close.assert_called_once()
+
+    def test_custom_bridge_timeout(self, monkeypatch):
+        params = self._base_params(bridge_timeout=45.0, cwd="/var/review")
+        agent_module, fake_module = self._install(monkeypatch, params, self._finished())
+        agent_module.main()
+        kwargs = fake_module.sdk.Client.launch_bridge.call_args.kwargs
+        assert kwargs["workspace"] == "/var/review"
+        assert kwargs["timeout"] == 45.0
+        fake_module.bridge_client.close.assert_called_once()
