@@ -11,6 +11,11 @@ One module today: `aknochow.cursor.agent` → `Agent.prompt` (local).
   (`api_key` is `no_log`).
 - Treat `structured` as generation-constrained JSON Schema. It is the last
   custom-tool argument blob, or it is absent.
+- Call `Agent.prompt` on the SDK default client. Always
+  `Client.launch_bridge(workspace=cwd)` and `client.close()` in `finally`
+  so the vendor node is bound to the caller path and reaped on failure.
+  `bridge_timeout` is discovery bring-up (default 120s), not a generation
+  budget.
 
 ## Effort vs catalog params
 

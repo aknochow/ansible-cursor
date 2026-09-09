@@ -44,6 +44,13 @@ Measured against a private 2026-09-06 capability spike; notes are not in this re
   substitute.
 - **Harness tax.** A one-word ping was ~3.3k input tokens with `tools=[]`,
   ~12k with default tools, ~20k via `agent -p`. Not a cheap completion.
+- **Local bridge bring-up.** The module launches `cursor-sdk-bridge` itself
+  (`Client.launch_bridge(workspace=cwd)`, default `bridge_timeout` 120s)
+  and closes it after the run. Nested Cursor-agent sessions have SIGKILL'd
+  the vendor `node` (`137`) and left wedged bridges that then miss the SDK's
+  30s discovery window. If a playbook fails with "timed out waiting for
+  bridge discovery", reap leftover `cursor-sdk-bridge` processes and retry
+  from a terminal that is not that Cursor-agent session.
 
 ## Examples
 
