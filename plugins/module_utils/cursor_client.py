@@ -4,8 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from ansible.module_utils.basic import env_fallback
+
 PROVIDER_ARGSPEC = dict(
-    api_key=dict(type="str", no_log=True),
+    api_key=dict(
+        type="str",
+        no_log=True,
+        fallback=(env_fallback, ["CURSOR_API_KEY"]),
+    ),
     cwd=dict(type="path", required=True),
 )
 
