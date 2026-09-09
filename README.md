@@ -45,10 +45,12 @@ Measured against a private 2026-09-06 capability spike; notes are not in this re
 - **Harness tax.** A one-word ping was ~3.3k input tokens with `tools=[]`,
   ~12k with default tools, ~20k via `agent -p`. Not a cheap completion.
 
-## Example
+## Examples
+
+Grok 4.6 draws the Cursor Models pool (dashboard **Auto** / Included). Third-party ids such as GPT draw Other Models (dashboard **API**). `effort` is the same operator knob either way; the module maps it onto the catalog param that id actually exposes.
 
 ```yaml
-- name: Structured classify
+- name: Structured classify (Cursor Models — Grok)
   aknochow.cursor.agent:
     prompt: A domestic housecat. Call report_animal.
     model: grok-4.6
@@ -72,8 +74,25 @@ Measured against a private 2026-09-06 capability spike; notes are not in this re
       - result.structured.legs == 4
 ```
 
-Model ids come from `Cursor.models.list()` for the key in use. Do not
-hardcode unusual ids without checking the catalog.
+```yaml
+- name: One-shot ping (Other Models — GPT-5.6 Luna)
+  aknochow.cursor.agent:
+    prompt: Reply with the single word pong.
+    model: gpt-5.6-luna
+    effort: high
+    cwd: "{{ playbook_dir }}"
+    tools: []
+  register: ping
+
+- name: Confirm high reasoning was sent
+  ansible.builtin.assert:
+    that:
+      - ping.text is search("pong", ignorecase=true)
+      - ping.effort_param.id == "reasoning"
+      - ping.effort_param.value == "high"
+```
+
+`api_key` may be omitted when `CURSOR_API_KEY` is in the process environment. There is no collection default model; pass an id from `Cursor.models.list()` for the key in use.
 
 `effort` is an operator knob, not a raw SDK field. The module maps it onto
 the catalog param that model exposes (`effort`, `reasoning`, or
