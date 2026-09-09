@@ -12,6 +12,14 @@ One module today: `aknochow.cursor.agent` → `Agent.prompt` (local).
 - Treat `structured` as generation-constrained JSON Schema. It is the last
   custom-tool argument blob, or it is absent.
 
+## Effort vs catalog params
+
+`aknochow.cursor.agent`'s `effort` option is capability metadata. Resolve
+it through `plugins/module_utils/model_params.py` — do not hardcode
+`ModelParameterValue(id="effort")`. Do not send `enable_thinking` (that is
+a local/Qwen Chat Completions field, not Cursor). Do not fold output-token
+or tool-turn budgets into this module.
+
 ## Tests
 
 ```bash

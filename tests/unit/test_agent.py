@@ -97,6 +97,10 @@ class TestResolveTools:
         with pytest.raises(ValueError, match="mcp"):
             resolve_tools([], {"name": "report"})
 
+    def test_tools_without_mcp_with_structured_errors(self):
+        with pytest.raises(ValueError, match="mcp"):
+            resolve_tools(["read"], {"name": "report"})
+
     def test_explicit_tools_kept(self):
         assert resolve_tools(["read", "mcp"], {"name": "report"}) == ["read", "mcp"]
 
@@ -125,13 +129,16 @@ class TestMain:
                 self.input_schema = input_schema
 
         mock_sdk.CustomTool = FakeCustomTool
-        mock_sdk.AgentOptions = lambda **kwargs: SimpleNamespace(**kwargs)
-        mock_sdk.LocalAgentOptions = lambda **kwargs: SimpleNamespace(**kwargs)
-        mock_sdk.ModelSelection = lambda **kwargs: SimpleNamespace(**kwargs)
-        mock_sdk.ModelParameterValue = lambda **kwargs: SimpleNamespace(**kwargs)
-        mock_sdk.AgentDefinition = lambda **kwargs: SimpleNamespace(**kwargs)
+        mock_sdk.AgentOptions = SimpleNamespace
+        mock_sdk.LocalAgentOptions = SimpleNamespace
+        mock_sdk.ModelSelection = SimpleNamespace
+        mock_sdk.ModelParameterValue = SimpleNamespace
+        mock_sdk.AgentDefinition = SimpleNamespace
+
+        prompt_options = []
 
         def fake_prompt(prompt, options):
+            prompt_options.append(options)
             if sdk_error:
                 raise sdk_error
             structured = params.get("structured_tool")
@@ -145,6 +152,7 @@ class TestMain:
         import sys
 
         monkeypatch.setitem(sys.modules, "cursor_sdk", mock_sdk)
+        fake_module.prompt_options = prompt_options
         return agent_module, fake_module
 
     def test_finished_text_only(self, monkeypatch):
@@ -238,6 +246,26 @@ class TestMain:
         assert "mcp" in fake_module.fail_json.call_args.kwargs["msg"]
         fake_module.exit_json.assert_not_called()
 
+    def test_tools_read_only_with_structured_fails(self, monkeypatch):
+        params = dict(
+            prompt="x",
+            model="grok-4.6",
+            cwd="/tmp",
+            api_key="cursor_test",
+            effort=None,
+            tools=["read"],
+            disallowed_tools=None,
+            structured_tool=dict(name="t", description="d", input_schema={}),
+            agents=None,
+            setting_sources=[],
+            mode=None,
+        )
+        agent_module, fake_module = self._install(monkeypatch, params, SimpleNamespace())
+        agent_module.main()
+        fake_module.fail_json.assert_called_once()
+        assert "mcp" in fake_module.fail_json.call_args.kwargs["msg"]
+        fake_module.exit_json.assert_not_called()
+
     def test_missing_sdk(self, monkeypatch):
         params = dict(
             prompt="x",
@@ -284,3 +312,69 @@ class TestMain:
         agent_module.main()
         fake_module.fail_json.assert_called_once()
         assert "status error" in fake_module.fail_json.call_args.kwargs["msg"]
+
+    def _base_params(self, **overrides):
+        params = dict(
+            prompt="x",
+            model="grok-4.6",
+            cwd="/tmp",
+            api_key="cursor_test",
+            effort=None,
+            tools=[],
+            disallowed_tools=None,
+            structured_tool=None,
+            agents=None,
+            setting_sources=[],
+            mode=None,
+        )
+        params.update(overrides)
+        return params
+
+    def _finished(self, model_id="grok-4.6"):
+        return SimpleNamespace(
+            result="pong",
+            status="finished",
+            model=SimpleNamespace(id=model_id),
+            agent_id="agent-1",
+            id="run-1",
+            duration_ms=10,
+            usage=None,
+        )
+
+    def test_luna_high_sends_reasoning(self, monkeypatch):
+        params = self._base_params(model="gpt-5.6-luna", effort="high", prompt="pong please")
+        agent_module, fake_module = self._install(monkeypatch, params, self._finished("gpt-5.6-luna"))
+        agent_module.main()
+        kwargs = fake_module.exit_json.call_args.kwargs
+        assert kwargs["effort_param"] == {"id": "reasoning", "value": "high"}
+        model = fake_module.prompt_options[0].model
+        assert model.id == "gpt-5.6-luna"
+        assert model.params[0].id == "reasoning"
+        assert model.params[0].value == "high"
+
+    def test_gemini_38_high_sends_reasoning_effort(self, monkeypatch):
+        params = self._base_params(model="gemini-3.8-flash", effort="high")
+        agent_module, fake_module = self._install(
+            monkeypatch, params, self._finished("gemini-3.8-flash")
+        )
+        agent_module.main()
+        kwargs = fake_module.exit_json.call_args.kwargs
+        assert kwargs["effort_param"] == {"id": "reasoning_effort", "value": "high"}
+        assert fake_module.prompt_options[0].model.params[0].id == "reasoning_effort"
+
+    def test_composer_high_omits_param(self, monkeypatch):
+        params = self._base_params(model="composer-2.5", effort="high")
+        agent_module, fake_module = self._install(monkeypatch, params, self._finished("composer-2.5"))
+        agent_module.main()
+        kwargs = fake_module.exit_json.call_args.kwargs
+        assert "effort_param" not in kwargs
+        assert fake_module.prompt_options[0].model == "composer-2.5"
+
+    def test_unsupported_value_fails_before_prompt(self, monkeypatch):
+        params = self._base_params(model="grok-4.5", effort="xhigh")
+        agent_module, fake_module = self._install(monkeypatch, params, self._finished("grok-4.5"))
+        agent_module.main()
+        fake_module.fail_json.assert_called_once()
+        assert "xhigh" in fake_module.fail_json.call_args.kwargs["msg"]
+        fake_module.exit_json.assert_not_called()
+        assert fake_module.prompt_options == []
