@@ -9,7 +9,7 @@ options:
   api_key:
     description:
       - Cursor user or service-account API key.
-      - If omitted, the value of the E(CURSOR_API_KEY) environment variable is used.
+      - If the value is not specified, the value of the E(CURSOR_API_KEY) environment variable will be used.
       - Never logged.
     type: str
   cwd:

@@ -26,8 +26,13 @@ build_ignore:
   - .gitignore
   - .pre-commit-config.yaml
   - .pytest_cache
+  - .ruff_cache
   - .venv
   - .yamllint
+  - .env
+  - artifacts
   - __pycache__
   - "*.egg-info"
   - tests
+  - AGENTS.md
+  - CLAUDE.md
