@@ -112,6 +112,9 @@ class TestMain:
         fake_module = MagicMock()
         fake_module.params = params
         monkeypatch.setattr(agent_module, "AnsibleModule", lambda **kwargs: fake_module)
+        monkeypatch.delenv("CURSOR_SDK_BRIDGE_URL", raising=False)
+        monkeypatch.delenv("CURSOR_SDK_BRIDGE_TOKEN", raising=False)
+        monkeypatch.delenv("CURSOR_SDK_BRIDGE_AUTH_TOKEN", raising=False)
 
         if missing_sdk:
             import sys
@@ -205,6 +208,71 @@ class TestMain:
         assert launch_kwargs["timeout"] == 120.0
         assert fake_module.prompt_client is fake_module.bridge_client
         fake_module.bridge_client.close.assert_called_once()
+        fake_module.sdk.Client.assert_not_called()
+
+    def test_attaches_when_bridge_url_and_token_set(self, monkeypatch):
+        result = SimpleNamespace(
+            result="pong",
+            status="finished",
+            model=SimpleNamespace(id="grok-4.6"),
+            agent_id="agent-1",
+            id="run-1",
+            duration_ms=10,
+            usage=None,
+        )
+        params = dict(
+            prompt="pong please",
+            model="grok-4.6",
+            cwd="/tmp",
+            api_key="cursor_test",
+            effort=None,
+            tools=[],
+            disallowed_tools=None,
+            structured_tool=None,
+            agents=None,
+            setting_sources=[],
+            mode=None,
+        )
+        agent_module, fake_module = self._install(monkeypatch, params, result)
+        monkeypatch.setenv("CURSOR_SDK_BRIDGE_URL", "http://127.0.0.1:9")
+        monkeypatch.setenv("CURSOR_SDK_BRIDGE_TOKEN", "sidecar-token")
+        attached = MagicMock()
+        fake_module.sdk.Client.return_value = attached
+        agent_module.main()
+        fake_module.sdk.Client.launch_bridge.assert_not_called()
+        kwargs = fake_module.sdk.Client.call_args.kwargs
+        assert kwargs["base_url"] == "http://127.0.0.1:9"
+        assert kwargs["auth_token"] == "sidecar-token"
+        assert kwargs["allow_api_key_env_fallback"] is True
+        assert fake_module.prompt_client is attached
+        attached.close.assert_called_once()
+        fake_module.exit_json.assert_called_once()
+
+    def test_incomplete_attach_env_fails_without_spawning(self, monkeypatch):
+        params = dict(
+            prompt="x",
+            model="grok-4.6",
+            cwd="/tmp",
+            api_key="k",
+            effort=None,
+            tools=[],
+            disallowed_tools=None,
+            structured_tool=None,
+            agents=None,
+            setting_sources=[],
+            mode=None,
+        )
+        agent_module, fake_module = self._install(monkeypatch, params, SimpleNamespace())
+        monkeypatch.setenv("CURSOR_SDK_BRIDGE_URL", "http://127.0.0.1:9")
+        monkeypatch.delenv("CURSOR_SDK_BRIDGE_TOKEN", raising=False)
+        monkeypatch.delenv("CURSOR_SDK_BRIDGE_AUTH_TOKEN", raising=False)
+        agent_module.main()
+        fake_module.fail_json.assert_called_once()
+        msg = fake_module.fail_json.call_args.kwargs["msg"]
+        assert "must be set together" in msg
+        assert "127.0.0.1" not in msg
+        fake_module.sdk.Client.launch_bridge.assert_not_called()
+        fake_module.exit_json.assert_not_called()
 
     def test_structured_tool_captures_args(self, monkeypatch):
         result = SimpleNamespace(
