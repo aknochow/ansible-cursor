@@ -52,6 +52,8 @@ options:
       - Built-in tools to offer. An empty list offers none.
       - Omitted with O(structured_tool) set defaults to V([mcp]), because custom
         tools are not offered when mcp is absent (measured 2026-09-06).
+      - An explicit list that omits V(mcp) with O(structured_tool) set fails
+        rather than running without the custom tool.
     type: list
     elements: str
   disallowed_tools:

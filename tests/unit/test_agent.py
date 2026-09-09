@@ -97,6 +97,10 @@ class TestResolveTools:
         with pytest.raises(ValueError, match="mcp"):
             resolve_tools([], {"name": "report"})
 
+    def test_tools_without_mcp_with_structured_errors(self):
+        with pytest.raises(ValueError, match="mcp"):
+            resolve_tools(["read"], {"name": "report"})
+
     def test_explicit_tools_kept(self):
         assert resolve_tools(["read", "mcp"], {"name": "report"}) == ["read", "mcp"]
 
@@ -230,6 +234,26 @@ class TestMain:
             api_key="cursor_test",
             effort=None,
             tools=[],
+            disallowed_tools=None,
+            structured_tool=dict(name="t", description="d", input_schema={}),
+            agents=None,
+            setting_sources=[],
+            mode=None,
+        )
+        agent_module, fake_module = self._install(monkeypatch, params, SimpleNamespace())
+        agent_module.main()
+        fake_module.fail_json.assert_called_once()
+        assert "mcp" in fake_module.fail_json.call_args.kwargs["msg"]
+        fake_module.exit_json.assert_not_called()
+
+    def test_tools_read_only_with_structured_fails(self, monkeypatch):
+        params = dict(
+            prompt="x",
+            model="grok-4.6",
+            cwd="/tmp",
+            api_key="cursor_test",
+            effort=None,
+            tools=["read"],
             disallowed_tools=None,
             structured_tool=dict(name="t", description="d", input_schema={}),
             agents=None,

@@ -76,13 +76,15 @@ def resolve_tools(tools, structured_tool) -> list[str] | None:
     Live spike 2026-09-06: tools=[] hides CustomTool (mcp is stripped).
     A structured_tool therefore requires mcp in the allowlist. When the
     caller omits tools and sets structured_tool, default to ["mcp"].
-    When they pass tools=[] with structured_tool, that is an error.
+    An explicit list that omits mcp (empty or not) is an error — otherwise
+    the custom tool is silently not offered and RV(structured) never appears.
     """
-    if structured_tool and tools == []:
-        raise ValueError(
-            "structured_tool requires the mcp tool to be offered; tools=[] hides custom tools. "
-            "Omit tools (defaults to [mcp]) or include mcp in the list."
-        )
     if tools is None and structured_tool:
         return ["mcp"]
+    if structured_tool and tools is not None and "mcp" not in tools:
+        raise ValueError(
+            "structured_tool requires the mcp tool to be offered; an explicit "
+            "tools list without mcp hides custom tools. Omit tools (defaults "
+            "to [mcp]) or include mcp in the list."
+        )
     return tools

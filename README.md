@@ -35,9 +35,10 @@ Measured against a private 2026-09-06 capability spike; notes are not in this re
 - **No generation-time JSON Schema.** `structured_tool` is a custom tool the
   model *may* call. Assert on `structured` in the playbook, the same way
   `aknochow.claude.agent` asserts when structured output is declined.
-- **`tools=[]` hides custom tools.** `structured_tool` therefore defaults
-  `tools` to `[mcp]`. Passing `tools: []` with `structured_tool` fails
-  loudly.
+- **A tools list without `mcp` hides custom tools.** `structured_tool`
+  therefore defaults `tools` to `[mcp]`. Passing `tools: []` or
+  `tools: [read]` (any explicit list that omits `mcp`) with
+  `structured_tool` fails loudly.
 - **No parent-level trusted-instruction field.** Subagent `agents.*.prompt`
   is the documented channel for that. The parent user message is not a
   substitute.
