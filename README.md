@@ -9,7 +9,9 @@ Same shape as the sibling collections (`aknochow.claude`, `aknochow.gemini`,
 This is **not** an OpenAI-compatible chat-completions client. Cursor Pro
 includes API access (`CURSOR_API_KEY`) for the Agent SDK, the `agent` CLI,
 and Cloud Agents. Pointing `aknochow.openai.chat` at `api.cursor.com` does
-not work.
+not work. First-party ids (Grok, Composer) draw the Cursor Models pool;
+third-party ids (GPT, Claude, Gemini, …) draw Other Models (the dashboard
+**API** line).
 
 ## Modules
 
@@ -70,5 +72,22 @@ Measured against a private 2026-09-06 capability spike; notes are not in this re
 ```
 
 Model ids come from `Cursor.models.list()` for the key in use. Do not
-hardcode unusual ids without checking the catalog. Grok 4.6 is `grok-4.6`
-with `effort` one of `low` / `medium` / `high` / `xhigh`.
+hardcode unusual ids without checking the catalog.
+
+`effort` is an operator knob, not a raw SDK field. The module maps it onto
+the catalog param that model exposes (`effort`, `reasoning`, or
+`reasoning_effort`) and **omits it** when the model has no such param.
+Unsupported values fail the task instead of being forwarded. It never
+sends `thinking`, `fast`, `context`, or `enable_thinking`.
+
+| Example id | `effort: high` becomes |
+|---|---|
+| `grok-4.6` | `effort=high` (also allows `xhigh`) |
+| `grok-4.5` | `effort=high` (`xhigh` is rejected) |
+| `gpt-5.6-luna` | `reasoning=high` |
+| `gemini-3.8-flash` | `reasoning_effort=high` |
+| `composer-2.5` | omitted |
+
+The matrix lives in `plugins/module_utils/model_params.py` (snapshot of
+`Cursor.models.list()` on 2026-09-09). Token, timeout, and retry budgets
+stay out of this module; plaibook owns those per pass.

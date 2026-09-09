@@ -11,8 +11,10 @@ module: agent
 short_description: Run a Cursor local agent via cursor-sdk
 description:
   - One-shot C(Agent.prompt) against the official Cursor Python SDK.
-  - Draws on a Cursor Pro (or higher) API key and the Cursor Models pool,
-    not an OpenAI-compatible chat-completions endpoint.
+  - Draws on a Cursor Pro (or higher) API key. First-party ids (Grok,
+    Composer) use the Cursor Models pool; third-party ids (GPT, Claude,
+    Gemini, ...) use the Other Models / API pool. Not an OpenAI-compatible
+    chat-completions endpoint.
   - Structured results are optional custom-tool arguments, not generation-time
     JSON Schema. The model can skip the tool; callers must assert on RV(structured).
   - Cloud agents are not implemented in this version.
@@ -34,10 +36,17 @@ options:
     required: true
   effort:
     description:
-      - Per-model effort parameter when the catalog exposes one (Grok 4.6 does).
-      - Passed as C(ModelSelection.params) C(effort).
+      - Operator reasoning/effort knob. Mapped onto the catalog param that
+        model actually exposes (C(effort), C(reasoning), or
+        C(reasoning_effort)).
+      - Omitted entirely when the model has no effort-like param (Composer,
+        some Claude/Gemini/GPT ids) or when this option is unset. Never sent
+        as C(thinking), C(fast), C(context), or C(enable_thinking).
+      - Values are model-specific. C(xhigh) aliases to C(extra-high) on GPT
+        ids that only list that name. An unsupported value fails the module
+        rather than being forwarded for the API to reject.
     type: str
-    choices: [low, medium, high, xhigh]
+    choices: [none, minimal, low, medium, high, xhigh, extra-high, max]
   tools:
     description:
       - Built-in tools to offer. An empty list offers none.
@@ -100,6 +109,14 @@ EXAMPLES = r"""
     cwd: /tmp
     tools: []
   register: ping
+
+- name: Other Models pool (GPT-5.6 Luna) with high reasoning
+  aknochow.cursor.agent:
+    prompt: Reply with the single word pong.
+    model: gpt-5.6-luna
+    effort: high
+    cwd: /tmp
+    tools: []
 
 - name: Structured extraction via custom tool
   aknochow.cursor.agent:
@@ -167,6 +184,17 @@ structured:
   description: Arguments of the last O(structured_tool) call, when one happened.
   type: dict
   returned: when structured_tool was set and the model called it
+effort_param:
+  description: Catalog param actually sent for O(effort), when one was sent.
+  type: dict
+  returned: when O(effort) mapped onto a catalog param
+  contains:
+    id:
+      description: Catalog parameter id (C(effort), C(reasoning), or C(reasoning_effort)).
+      type: str
+    value:
+      description: Canonical value sent after aliasing.
+      type: str
 """
 
 from ansible.module_utils.basic import AnsibleModule
@@ -174,6 +202,11 @@ from ansible_collections.aknochow.cursor.plugins.module_utils.cursor_client impo
     PROVIDER_ARGSPEC,
     flatten_run,
     resolve_tools,
+)
+from ansible_collections.aknochow.cursor.plugins.module_utils.model_params import (
+    OPERATOR_EFFORT_VALUES,
+    UnsupportedEffortValue,
+    resolve_effort_param,
 )
 
 
@@ -198,9 +231,13 @@ def _structured_capture(structured_tool):
 
 def _build_options(params, AgentOptions, LocalAgentOptions, ModelSelection, ModelParameterValue, AgentDefinition):
     model_id = params["model"]
-    effort = params.get("effort")
-    if effort:
-        model = ModelSelection(id=model_id, params=(ModelParameterValue(id="effort", value=effort),))
+    try:
+        effort_param = resolve_effort_param(model_id, params.get("effort"))
+    except UnsupportedEffortValue as exc:
+        return None, str(exc), None
+    if effort_param:
+        param_id, value = effort_param
+        model = ModelSelection(id=model_id, params=(ModelParameterValue(id=param_id, value=value),))
     else:
         model = model_id
 
@@ -208,7 +245,7 @@ def _build_options(params, AgentOptions, LocalAgentOptions, ModelSelection, Mode
     try:
         tools = resolve_tools(params.get("tools"), structured_tool)
     except ValueError as exc:
-        return None, str(exc)
+        return None, str(exc), None
 
     custom_tools = None
     captured = []
@@ -222,7 +259,7 @@ def _build_options(params, AgentOptions, LocalAgentOptions, ModelSelection, Mode
         agents = {}
         for key, spec in raw_agents.items():
             if not isinstance(spec, dict) or "description" not in spec or "prompt" not in spec:
-                return None, f"agents.{key} needs description and prompt"
+                return None, f"agents.{key} needs description and prompt", None
             agents[key] = AgentDefinition(
                 description=spec["description"],
                 prompt=spec["prompt"],
@@ -247,14 +284,20 @@ def _build_options(params, AgentOptions, LocalAgentOptions, ModelSelection, Mode
     if params.get("mode"):
         kwargs["mode"] = params["mode"]
 
-    return AgentOptions(**kwargs), captured
+    return AgentOptions(**kwargs), captured, effort_param
+
+
+def _effort_return(effort_param):
+    if not effort_param:
+        return {}
+    return {"effort_param": {"id": effort_param[0], "value": effort_param[1]}}
 
 
 def main():
     argument_spec = dict(
         prompt=dict(type="str", required=True),
         model=dict(type="str", required=True),
-        effort=dict(type="str", choices=["low", "medium", "high", "xhigh"]),
+        effort=dict(type="str", choices=list(OPERATOR_EFFORT_VALUES)),
         tools=dict(type="list", elements="str"),
         disallowed_tools=dict(type="list", elements="str"),
         structured_tool=dict(type="dict"),
@@ -283,7 +326,7 @@ def main():
         module.fail_json(msg="The cursor-sdk Python package is required. Install it with: pip install 'cursor-sdk>=1.0.31'")
         return
 
-    options, captured_or_err = _build_options(
+    options, captured_or_err, effort_param = _build_options(
         module.params,
         AgentOptions,
         LocalAgentOptions,
@@ -311,11 +354,16 @@ def main():
         module.fail_json(
             msg=f"Cursor run finished with status error (run_id={getattr(result, 'id', None)})",
             **flatten_run(result, structured=(captured[-1] if captured else None)),
+            **_effort_return(effort_param),
         )
         return
 
     structured = captured[-1] if captured else None
-    module.exit_json(changed=False, **flatten_run(result, structured=structured))
+    module.exit_json(
+        changed=False,
+        **flatten_run(result, structured=structured),
+        **_effort_return(effort_param),
+    )
 
 
 if __name__ == "__main__":
