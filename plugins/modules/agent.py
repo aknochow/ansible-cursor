@@ -227,10 +227,23 @@ from ansible_collections.aknochow.cursor.plugins.module_utils.model_params impor
     resolve_effort_param,
 )
 
+_STRUCTURED_TOOL_KEYS = ("name", "description", "input_schema")
+
 
 def _structured_capture(structured_tool):
     """Build a CustomTool whose execute records arguments for RV(structured)."""
     from cursor_sdk import CustomTool
+
+    if not isinstance(structured_tool, dict):
+        raise ValueError(
+            "structured_tool requires name, description, and input_schema"
+        )
+    missing = [key for key in _STRUCTURED_TOOL_KEYS if structured_tool.get(key) is None]
+    if missing:
+        raise ValueError(
+            "structured_tool requires name, description, and input_schema "
+            f"(missing: {', '.join(missing)})"
+        )
 
     captured = []
     spec = structured_tool
@@ -260,16 +273,15 @@ def _build_options(params, AgentOptions, LocalAgentOptions, ModelSelection, Mode
         model = model_id
 
     structured_tool = params.get("structured_tool")
-    try:
-        tools = resolve_tools(params.get("tools"), structured_tool)
-    except ValueError as exc:
-        return None, str(exc), None
-
     custom_tools = None
     captured = []
-    if structured_tool:
-        name, tool, captured = _structured_capture(structured_tool)
-        custom_tools = {name: tool}
+    try:
+        tools = resolve_tools(params.get("tools"), structured_tool)
+        if structured_tool is not None:
+            name, tool, captured = _structured_capture(structured_tool)
+            custom_tools = {name: tool}
+    except ValueError as exc:
+        return None, str(exc), None
 
     agents = None
     raw_agents = params.get("agents") or None
@@ -318,7 +330,14 @@ def main():
         effort=dict(type="str", choices=list(OPERATOR_EFFORT_VALUES)),
         tools=dict(type="list", elements="str"),
         disallowed_tools=dict(type="list", elements="str"),
-        structured_tool=dict(type="dict"),
+        structured_tool=dict(
+            type="dict",
+            options=dict(
+                name=dict(type="str", required=True),
+                description=dict(type="str", required=True),
+                input_schema=dict(type="dict", required=True),
+            ),
+        ),
         agents=dict(type="dict"),
         setting_sources=dict(type="list", elements="str", default=[]),
         mode=dict(type="str", choices=["agent", "plan"]),

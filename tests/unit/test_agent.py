@@ -238,6 +238,50 @@ class TestMain:
         kwargs = fake_module.exit_json.call_args.kwargs
         assert kwargs["structured"] == {"animal": "cat", "legs": 4}
 
+    def test_structured_tool_empty_dict_fails(self, monkeypatch):
+        params = dict(
+            prompt="x",
+            model="grok-4.6",
+            cwd="/tmp",
+            api_key="cursor_test",
+            effort=None,
+            tools=None,
+            disallowed_tools=None,
+            structured_tool={},
+            agents=None,
+            setting_sources=[],
+            mode=None,
+        )
+        agent_module, fake_module = self._install(monkeypatch, params, SimpleNamespace())
+        agent_module.main()
+        fake_module.fail_json.assert_called_once()
+        msg = fake_module.fail_json.call_args.kwargs["msg"]
+        assert "structured_tool" in msg
+        assert "name" in msg
+        fake_module.exit_json.assert_not_called()
+
+    def test_structured_tool_missing_description_fails(self, monkeypatch):
+        params = dict(
+            prompt="x",
+            model="grok-4.6",
+            cwd="/tmp",
+            api_key="cursor_test",
+            effort=None,
+            tools=None,
+            disallowed_tools=None,
+            structured_tool=dict(name="t", input_schema={}),
+            agents=None,
+            setting_sources=[],
+            mode=None,
+        )
+        agent_module, fake_module = self._install(monkeypatch, params, SimpleNamespace())
+        agent_module.main()
+        fake_module.fail_json.assert_called_once()
+        msg = fake_module.fail_json.call_args.kwargs["msg"]
+        assert "structured_tool" in msg
+        assert "description" in msg
+        fake_module.exit_json.assert_not_called()
+
     def test_tools_empty_with_structured_fails(self, monkeypatch):
         params = dict(
             prompt="x",
