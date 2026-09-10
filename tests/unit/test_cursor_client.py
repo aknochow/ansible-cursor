@@ -55,3 +55,21 @@ class TestResolveAttachedBridge:
         monkeypatch.setenv("CURSOR_SDK_BRIDGE_TOKEN", "sidecar-token")
         with pytest.raises(AttachedBridgeIncomplete, match="must be set together"):
             resolve_attached_bridge()
+
+    def test_file_paths(self, monkeypatch, tmp_path):
+        url_file = tmp_path / "url"
+        token_file = tmp_path / "token"
+        url_file.write_text("http://127.0.0.1:9\n")
+        token_file.write_text("file-token\n")
+        monkeypatch.setenv("CURSOR_SDK_BRIDGE_URL_FILE", str(url_file))
+        monkeypatch.setenv("CURSOR_SDK_BRIDGE_TOKEN_FILE", str(token_file))
+        assert resolve_attached_bridge() == ("http://127.0.0.1:9", "file-token")
+
+    def test_file_url_without_token_raises_without_values(self, monkeypatch, tmp_path):
+        url_file = tmp_path / "url"
+        url_file.write_text("http://127.0.0.1:9\n")
+        monkeypatch.setenv("CURSOR_SDK_BRIDGE_URL_FILE", str(url_file))
+        with pytest.raises(AttachedBridgeIncomplete, match="must be set together") as exc:
+            resolve_attached_bridge()
+        assert "127.0.0.1" not in str(exc.value)
+        assert "file-token" not in str(exc.value)

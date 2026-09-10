@@ -17,7 +17,8 @@ third-party ids (GPT, Claude, Gemini, …) draw Other Models (the dashboard
 
 | Module | Purpose |
 |---|---|
-| `agent` | One-shot `Agent.prompt` (local runtime). Optional `structured_tool` captures custom-tool arguments as `structured`. |
+| `agent` | One-shot `Agent.prompt` (local runtime). Optional `structured_tool` captures custom-tool arguments as `structured`. Attaches to `CURSOR_SDK_BRIDGE_URL` + token when set. |
+| `bridge` | Playbook-owned sidecar: `state=present` double-forks `cursor-sdk-bridge` (not a child of ansible-playbook); `state=absent` reaps the pidfile. Never returns the token. |
 
 Cloud agents and a CLI (`agent -p`) wrapper are deliberately not in 0.1.0.
 
@@ -44,15 +45,19 @@ Measured against a private 2026-09-06 capability spike; notes are not in this re
   substitute.
 - **Harness tax.** A one-word ping was ~3.3k input tokens with `tools=[]`,
   ~12k with default tools, ~20k via `agent -p`. Not a cheap completion.
-- **Local bridge bring-up.** By default the module launches
+- **Local bridge bring-up.** By default `agent` launches
   `cursor-sdk-bridge` (`Client.launch_bridge(workspace=cwd)`, default
   `bridge_timeout` 120s) and closes it after the run. Nested Cursor-agent
-  sessions SIGKILL that vendor `node` (`137`). The SDK attach path is
+  sessions SIGKILL that vendor `node` (`137`). Attach instead: set
   `CURSOR_SDK_BRIDGE_URL` plus `CURSOR_SDK_BRIDGE_TOKEN` (or
-  `CURSOR_SDK_BRIDGE_AUTH_TOKEN`): start one sidecar *outside* the IDE
-  agent (tmux, launchd, AAP EE), then the module uses `Client(...)` and
-  does not spawn. Never print the token. If spawn discovery times out,
-  reap leftover `cursor-sdk-bridge` processes before retrying.
+  `CURSOR_SDK_BRIDGE_AUTH_TOKEN`), or the path-only `*_FILE` variants.
+  `aknochow.cursor.bridge` (`state=present`) daemonizes a sidecar from the
+  playbook (double-fork + `setsid`, files under `~/.cache/ansible-cursor-sidecar/`).
+  `state=absent` reaps the pidfile. Never print the token. Never `nohup`
+  or Ansible `async`/`poll=0` for this process. `agent` still passes its
+  own `cwd` as `LocalAgentOptions`; the sidecar workspace is a dedicated
+  directory. If spawn discovery times out, reap leftover bridges via the
+  pidfile before retrying.
 
 ## Examples
 
@@ -102,6 +107,27 @@ Grok 4.6 draws the Cursor Models pool (dashboard **Auto** / Included). Third-par
 ```
 
 `api_key` may be omitted when `CURSOR_API_KEY` is in the process environment. There is no collection default model; pass an id from `Cursor.models.list()` for the key in use.
+
+```yaml
+- name: Daemonize a sidecar so nested Cursor-agent sessions can attach
+  aknochow.cursor.bridge:
+    state: present
+  register: sidecar
+
+- name: Agent tasks inherit attach via CURSOR_SDK_BRIDGE_URL_FILE (paths, not the token)
+  aknochow.cursor.agent:
+    prompt: Reply with the single word pong.
+    model: grok-4.6
+    cwd: "{{ playbook_dir }}"
+    tools: []
+  environment:
+    CURSOR_SDK_BRIDGE_URL_FILE: "{{ sidecar.url_file }}"
+    CURSOR_SDK_BRIDGE_TOKEN_FILE: "{{ sidecar.token_file }}"
+
+- name: Reap the sidecar
+  aknochow.cursor.bridge:
+    state: absent
+```
 
 `effort` is an operator knob, not a raw SDK field. The module maps it onto
 the catalog param that model exposes (`effort`, `reasoning`, or

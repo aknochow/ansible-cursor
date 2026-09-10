@@ -248,6 +248,45 @@ class TestMain:
         attached.close.assert_called_once()
         fake_module.exit_json.assert_called_once()
 
+    def test_attaches_from_token_file_env(self, monkeypatch, tmp_path):
+        result = SimpleNamespace(
+            result="pong",
+            status="finished",
+            model=SimpleNamespace(id="grok-4.6"),
+            agent_id="agent-1",
+            id="run-1",
+            duration_ms=10,
+            usage=None,
+        )
+        params = dict(
+            prompt="pong please",
+            model="grok-4.6",
+            cwd="/tmp",
+            api_key="cursor_test",
+            effort=None,
+            tools=[],
+            disallowed_tools=None,
+            structured_tool=None,
+            agents=None,
+            setting_sources=[],
+            mode=None,
+        )
+        agent_module, fake_module = self._install(monkeypatch, params, result)
+        url_file = tmp_path / "url"
+        token_file = tmp_path / "token"
+        url_file.write_text("http://127.0.0.1:9\n")
+        token_file.write_text("file-token\n")
+        monkeypatch.setenv("CURSOR_SDK_BRIDGE_URL_FILE", str(url_file))
+        monkeypatch.setenv("CURSOR_SDK_BRIDGE_TOKEN_FILE", str(token_file))
+        attached = MagicMock()
+        fake_module.sdk.Client.return_value = attached
+        agent_module.main()
+        fake_module.sdk.Client.launch_bridge.assert_not_called()
+        kwargs = fake_module.sdk.Client.call_args.kwargs
+        assert kwargs["base_url"] == "http://127.0.0.1:9"
+        assert kwargs["auth_token"] == "file-token"
+        assert kwargs["allow_api_key_env_fallback"] is True
+
     def test_incomplete_attach_env_fails_without_spawning(self, monkeypatch):
         params = dict(
             prompt="x",
