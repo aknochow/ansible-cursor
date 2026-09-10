@@ -2,14 +2,46 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from ansible.module_utils.basic import env_fallback
+
+# SDK Client._default_client() attach env. Token values must never be logged.
+BRIDGE_URL_ENV = "CURSOR_SDK_BRIDGE_URL"
+BRIDGE_TOKEN_ENVS = ("CURSOR_SDK_BRIDGE_TOKEN", "CURSOR_SDK_BRIDGE_AUTH_TOKEN")
 
 # SDK Bridge.launch default is 30s. Nested Cursor-agent sessions have
 # SIGKILL'd the vendor node and left wedged bridges; 120s is bring-up
 # only, not a generation budget.
 DEFAULT_BRIDGE_TIMEOUT = 120.0
+
+
+class AttachedBridgeIncomplete(ValueError):
+    """URL or token set without the other. The message must not include values."""
+
+
+def resolve_attached_bridge() -> tuple[str, str] | None:
+    """Return (url, token) when a sidecar bridge is configured.
+
+    Matches cursor_sdk.Client._default_client(): both URL and token required.
+    Incomplete pairs raise AttachedBridgeIncomplete (no secret in the message).
+    """
+    url = (os.environ.get(BRIDGE_URL_ENV) or "").strip()
+    token = ""
+    for key in BRIDGE_TOKEN_ENVS:
+        token = (os.environ.get(key) or "").strip()
+        if token:
+            break
+    if url and token:
+        return url, token
+    if url or token:
+        raise AttachedBridgeIncomplete(
+            "CURSOR_SDK_BRIDGE_URL and CURSOR_SDK_BRIDGE_TOKEN "
+            "(or CURSOR_SDK_BRIDGE_AUTH_TOKEN) must be set together"
+        )
+    return None
+
 
 PROVIDER_ARGSPEC = dict(
     api_key=dict(

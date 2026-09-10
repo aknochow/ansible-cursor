@@ -18,6 +18,10 @@ description:
   - Structured results are optional custom-tool arguments, not generation-time
     JSON Schema. The model can skip the tool; callers must assert on RV(structured).
   - Cloud agents are not implemented in this version.
+  - When E(CURSOR_SDK_BRIDGE_URL) and E(CURSOR_SDK_BRIDGE_TOKEN) (or
+    E(CURSOR_SDK_BRIDGE_AUTH_TOKEN)) are both set, the module attaches to
+    that sidecar and does not spawn the vendor node. Start the sidecar
+    outside a Cursor IDE agent session; nested C(launch_bridge) is SIGKILL'd.
 version_added: "0.1.0"
 author:
   - Adam Knochowski (@aknochow)
@@ -100,11 +104,11 @@ options:
     choices: [agent, plan]
   bridge_timeout:
     description:
-      - Seconds to wait for C(cursor-sdk-bridge ready) on stderr. The SDK
-        default is 30; this module waits 120 because a nested Cursor-agent
-        session can SIGKILL the vendor node or leave a wedged bridge that
-        then misses a short discovery window. Not a generation or tool-turn
-        budget.
+      - Seconds to wait for C(cursor-sdk-bridge ready) on stderr when this
+        module spawns the vendor node. Ignored when attaching to
+        E(CURSOR_SDK_BRIDGE_URL). The SDK default is 30; this module waits
+        120 because a nested Cursor-agent session can SIGKILL the child.
+        Not a generation or tool-turn budget.
     type: float
     default: 120
 extends_documentation_fragment:
@@ -218,7 +222,9 @@ from ansible.module_utils.basic import AnsibleModule
 from ansible_collections.aknochow.cursor.plugins.module_utils.cursor_client import (
     DEFAULT_BRIDGE_TIMEOUT,
     PROVIDER_ARGSPEC,
+    AttachedBridgeIncomplete,
     flatten_run,
+    resolve_attached_bridge,
     resolve_tools,
 )
 from ansible_collections.aknochow.cursor.plugins.module_utils.model_params import (
@@ -359,16 +365,32 @@ def main():
         return
 
     captured = captured_or_err
+    try:
+        attached = resolve_attached_bridge()
+    except AttachedBridgeIncomplete as exc:
+        module.fail_json(msg=str(exc))
+        return
+
     client = None
     try:
-        # Own the bridge: workspace is the caller cwd (the repo under
-        # review), not ansible-playbook's process cwd. close() reaps the
-        # vendor node on both success and start failure.
-        client = Client.launch_bridge(
-            workspace=module.params["cwd"],
-            timeout=module.params.get("bridge_timeout") or DEFAULT_BRIDGE_TIMEOUT,
-            allow_api_key_env_fallback=True,
-        )
+        if attached:
+            # SDK attach path: sidecar started outside cursor-agent.
+            # Client.connect() does not pass allow_api_key_env_fallback.
+            url, token = attached
+            client = Client(
+                base_url=url,
+                auth_token=token,
+                allow_api_key_env_fallback=True,
+            )
+        else:
+            # Own the bridge: workspace is the caller cwd, not
+            # ansible-playbook's process cwd. close() reaps the vendor
+            # node on both success and start failure.
+            client = Client.launch_bridge(
+                workspace=module.params["cwd"],
+                timeout=module.params.get("bridge_timeout") or DEFAULT_BRIDGE_TIMEOUT,
+                allow_api_key_env_fallback=True,
+            )
         result = Agent.prompt(module.params["prompt"], options, client=client)
     except CursorAgentError as err:
         module.fail_json(msg=f"Cursor agent failed to start: {err}")
