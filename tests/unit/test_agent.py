@@ -432,6 +432,29 @@ class TestMain:
         fake_module.fail_json.assert_called_once()
         assert "status error" in fake_module.fail_json.call_args.kwargs["msg"]
 
+    def test_empty_structured_tool_fails_without_traceback(self, monkeypatch):
+        params = self._base_params(structured_tool={})
+        agent_module, fake_module = self._install(monkeypatch, params, SimpleNamespace())
+        agent_module.main()
+        fake_module.fail_json.assert_called_once()
+        msg = fake_module.fail_json.call_args.kwargs["msg"]
+        assert "structured_tool" in msg
+        assert "name" in msg
+        fake_module.exit_json.assert_not_called()
+
+    def test_structured_tool_missing_description_fails_without_traceback(self, monkeypatch):
+        params = self._base_params(
+            structured_tool=dict(name="report_animal", input_schema={"type": "object"}),
+        )
+        agent_module, fake_module = self._install(monkeypatch, params, SimpleNamespace())
+        agent_module.main()
+        fake_module.fail_json.assert_called_once()
+        msg = fake_module.fail_json.call_args.kwargs["msg"]
+        assert "structured_tool" in msg
+        assert "description" in msg
+        assert "KeyError" not in msg
+        fake_module.exit_json.assert_not_called()
+
     def _base_params(self, **overrides):
         params = dict(
             prompt="x",
