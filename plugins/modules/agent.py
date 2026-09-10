@@ -238,11 +238,34 @@ from ansible_collections.aknochow.cursor.plugins.module_utils.model_params impor
 
 
 def _structured_capture(structured_tool):
-    """Build a CustomTool whose execute records arguments for RV(structured)."""
+    """Build a CustomTool whose execute records arguments for RV(structured).
+
+    DOCUMENTATION already marks name/description/input_schema required.
+    argument_spec repeats that for live AnsibleModule validation; this
+    helper still fail_jsons (via ValueError) because unit tests mock
+    AnsibleModule and skip spec checks. Never KeyError on a partial dict.
+    """
     from cursor_sdk import CustomTool
 
+    if not isinstance(structured_tool, dict):
+        raise ValueError("structured_tool must be a dict with name, description, and input_schema")
+
+    missing = []
+    name = structured_tool.get("name")
+    description = structured_tool.get("description")
+    input_schema = structured_tool.get("input_schema")
+    if not isinstance(name, str) or not name.strip():
+        missing.append("name")
+    if not isinstance(description, str) or not description.strip():
+        missing.append("description")
+    if not isinstance(input_schema, dict):
+        missing.append("input_schema")
+    if missing:
+        raise ValueError(
+            "structured_tool is missing required option(s): " + ", ".join(missing)
+        )
+
     captured = []
-    spec = structured_tool
 
     def execute(args, context):  # noqa: ARG001
         captured.append(dict(args))
@@ -250,10 +273,10 @@ def _structured_capture(structured_tool):
 
     tool = CustomTool(
         execute=execute,
-        description=spec["description"],
-        input_schema=spec["input_schema"],
+        description=description,
+        input_schema=input_schema,
     )
-    return spec["name"], tool, captured
+    return name, tool, captured
 
 
 def _build_options(params, AgentOptions, LocalAgentOptions, ModelSelection, ModelParameterValue, AgentDefinition):
@@ -269,16 +292,15 @@ def _build_options(params, AgentOptions, LocalAgentOptions, ModelSelection, Mode
         model = model_id
 
     structured_tool = params.get("structured_tool")
+    custom_tools = None
+    captured = []
     try:
+        if structured_tool is not None:
+            name, tool, captured = _structured_capture(structured_tool)
+            custom_tools = {name: tool}
         tools = resolve_tools(params.get("tools"), structured_tool)
     except ValueError as exc:
         return None, str(exc), None
-
-    custom_tools = None
-    captured = []
-    if structured_tool:
-        name, tool, captured = _structured_capture(structured_tool)
-        custom_tools = {name: tool}
 
     agents = None
     raw_agents = params.get("agents") or None
@@ -327,7 +349,14 @@ def main():
         effort=dict(type="str", choices=list(OPERATOR_EFFORT_VALUES)),
         tools=dict(type="list", elements="str"),
         disallowed_tools=dict(type="list", elements="str"),
-        structured_tool=dict(type="dict"),
+        structured_tool=dict(
+            type="dict",
+            options=dict(
+                name=dict(type="str", required=True),
+                description=dict(type="str", required=True),
+                input_schema=dict(type="dict", required=True),
+            ),
+        ),
         agents=dict(type="dict"),
         setting_sources=dict(type="list", elements="str", default=[]),
         mode=dict(type="str", choices=["agent", "plan"]),
