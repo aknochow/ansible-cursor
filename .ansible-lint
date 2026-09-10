@@ -1,0 +1,8 @@
+---
+profile: min
+
+mock_modules:
+  - aknochow.cursor.agent
+
+exclude_paths:
+  - .venv/
