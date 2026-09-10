@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
 
 from ansible.module_utils.basic import env_fallback
@@ -10,6 +11,9 @@ from ansible.module_utils.basic import env_fallback
 # SDK Client._default_client() attach env. Token values must never be logged.
 BRIDGE_URL_ENV = "CURSOR_SDK_BRIDGE_URL"
 BRIDGE_TOKEN_ENVS = ("CURSOR_SDK_BRIDGE_TOKEN", "CURSOR_SDK_BRIDGE_AUTH_TOKEN")
+# Path-only variants so a playbook can attach without set_fact of the token.
+BRIDGE_URL_FILE_ENV = "CURSOR_SDK_BRIDGE_URL_FILE"
+BRIDGE_TOKEN_FILE_ENV = "CURSOR_SDK_BRIDGE_TOKEN_FILE"
 
 # SDK Bridge.launch default is 30s. Nested Cursor-agent sessions have
 # SIGKILL'd the vendor node and left wedged bridges; 120s is bring-up
@@ -21,18 +25,36 @@ class AttachedBridgeIncomplete(ValueError):
     """URL or token set without the other. The message must not include values."""
 
 
+def _read_secret_file(path: str) -> str:
+    try:
+        return Path(path).read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
 def resolve_attached_bridge() -> tuple[str, str] | None:
     """Return (url, token) when a sidecar bridge is configured.
 
     Matches cursor_sdk.Client._default_client(): both URL and token required.
+    File-path env vars are also accepted so playbooks never set_fact the token.
     Incomplete pairs raise AttachedBridgeIncomplete (no secret in the message).
     """
     url = (os.environ.get(BRIDGE_URL_ENV) or "").strip()
+    if not url:
+        url_file = (os.environ.get(BRIDGE_URL_FILE_ENV) or "").strip()
+        if url_file:
+            url = _read_secret_file(url_file)
+
     token = ""
     for key in BRIDGE_TOKEN_ENVS:
         token = (os.environ.get(key) or "").strip()
         if token:
             break
+    if not token:
+        token_file = (os.environ.get(BRIDGE_TOKEN_FILE_ENV) or "").strip()
+        if token_file:
+            token = _read_secret_file(token_file)
+
     if url and token:
         return url, token
     if url or token:
