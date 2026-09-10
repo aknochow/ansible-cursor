@@ -20,8 +20,11 @@ description:
   - Cloud agents are not implemented in this version.
   - When E(CURSOR_SDK_BRIDGE_URL) and E(CURSOR_SDK_BRIDGE_TOKEN) (or
     E(CURSOR_SDK_BRIDGE_AUTH_TOKEN)) are both set, the module attaches to
-    that sidecar and does not spawn the vendor node. Start the sidecar
-    outside a Cursor IDE agent session; nested C(launch_bridge) is SIGKILL'd.
+    that sidecar and does not spawn the vendor node. Path-only variants
+    E(CURSOR_SDK_BRIDGE_URL_FILE) / E(CURSOR_SDK_BRIDGE_TOKEN_FILE) are
+    also accepted so a playbook can attach without C(set_fact) of the token.
+    Use C(aknochow.cursor.bridge) to daemonize a sidecar from the playbook
+    itself; nested C(launch_bridge) under a Cursor IDE agent is SIGKILL'd.
 version_added: "0.1.0"
 author:
   - Adam Knochowski (@aknochow)

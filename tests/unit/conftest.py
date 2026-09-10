@@ -26,6 +26,21 @@ def _create_namespace_shim(prefix: str, collection_name: str, project_root: Path
 _namespace_root = _create_namespace_shim("ansible_cursor_test_", "cursor", _project_root)
 sys.path.insert(0, str(_namespace_root))
 
+_BRIDGE_ENV_KEYS = (
+    "CURSOR_SDK_BRIDGE_URL",
+    "CURSOR_SDK_BRIDGE_TOKEN",
+    "CURSOR_SDK_BRIDGE_AUTH_TOKEN",
+    "CURSOR_SDK_BRIDGE_URL_FILE",
+    "CURSOR_SDK_BRIDGE_TOKEN_FILE",
+    "CURSOR_SDK_BRIDGE_BIN",
+)
+
+
+@pytest.fixture(autouse=True)
+def _clear_bridge_env(monkeypatch):
+    for key in _BRIDGE_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
 
 @pytest.fixture
 def namespace_shim_factory():
