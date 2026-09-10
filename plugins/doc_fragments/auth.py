@@ -15,8 +15,9 @@ options:
   cwd:
     description:
       - Working directory for a local agent, and the workspace passed to
-        C(Client.launch_bridge). Always set explicitly; the SDK default
-        client otherwise binds the vendor node to ansible-playbook's cwd.
+        C(Client.launch_bridge) when this process spawns the vendor node.
+        Ignored as a bridge workspace when attaching via
+        E(CURSOR_SDK_BRIDGE_URL). Always set explicitly.
     type: path
     required: true
 """
