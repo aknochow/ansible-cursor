@@ -8,6 +8,34 @@ resolution-markers = [
 ]
 
 [[package]]
+name = "aknochow-cursor"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "ansible-core" },
+    { name = "cursor-sdk" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "ansible-lint" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "ansible-core", specifier = ">=2.16.0,<2.19.0" },
+    { name = "ansible-lint", marker = "extra == 'dev'", specifier = ">=24.0.0" },
+    { name = "cursor-sdk", specifier = ">=1.0.31,<2.0.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0,<10.0.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0,<7.0.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9.0" },
+]
+provides-extras = ["dev"]
+
+[[package]]
 name = "ansible-compat"
 version = "26.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -38,34 +66,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/d0/82/b29d6524de5abc340
 wheels = [
     { url = "https://files.pythonhosted.org/packages/63/6d/296e746e08021bda36bf0480aa0bc3e263048d8e266ee5a1b0bc11738c7a/ansible_core-2.18.19-py3-none-any.whl", hash = "sha256:00f53c10d97ce001f6e49857820901b3e8d2f234cb9f5fd9fdf8092c14109fa0", size = 2218069, upload-time = "2026-08-10T16:41:39.617Z" },
 ]
-
-[[package]]
-name = "ansible-cursor"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "ansible-core" },
-    { name = "cursor-sdk" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "ansible-lint" },
-    { name = "pytest" },
-    { name = "pytest-cov" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "ansible-core", specifier = ">=2.16.0,<2.19.0" },
-    { name = "ansible-lint", marker = "extra == 'dev'", specifier = ">=24.0.0" },
-    { name = "cursor-sdk", specifier = ">=1.0.31,<2.0.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0,<10.0.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0,<7.0.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9.0" },
-]
-provides-extras = ["dev"]
 
 [[package]]
 name = "ansible-lint"

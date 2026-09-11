@@ -33,6 +33,9 @@ build_ignore:
   - artifacts
   - __pycache__
   - "*.egg-info"
+  - build
+  - dist
+  - hatch_build.py
   - tests
   - AGENTS.md
   - CLAUDE.md
