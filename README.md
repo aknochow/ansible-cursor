@@ -1,5 +1,7 @@
 # aknochow.cursor
 
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/aknochow/ansible-cursor/badge)](https://scorecard.dev/viewer/?uri=github.com/aknochow/ansible-cursor)
+
 Ansible collection for running [Cursor](https://cursor.com) agents via the
 official [cursor-sdk](https://pypi.org/project/cursor-sdk/) Python package.
 Same shape as the sibling collections (`aknochow.claude`, `aknochow.gemini`,
