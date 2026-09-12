@@ -31,6 +31,12 @@ pip install 'cursor-sdk>=1.0.31'
 export CURSOR_API_KEY=...   # Dashboard → Integrations; never print this
 ```
 
+Install the collection itself from Galaxy (`ansible-galaxy collection install
+aknochow.cursor`) or, in a venv, as a pip wheel that lands on Ansible's
+`ansible_collections` sys.path (`pip install .` from this checkout). The PyPI
+name is `aknochow-cursor`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
+wheel layout and a two-collection smoke test.
+
 ## Known limits (measured 2026-09-06)
 
 Measured against a private 2026-09-06 capability spike; notes are not in this repository.
