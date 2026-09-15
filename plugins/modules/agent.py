@@ -11,7 +11,7 @@ module: agent
 short_description: Run a Cursor local agent via cursor-sdk
 description:
   - One-shot local run (C(Agent.create) + C(send) + event drain + C(wait))
-    against the official Cursor Python SDK. Not C(Agent.prompt): that
+    against the official Cursor Python SDK. Not C(Agent.prompt), which
     discards the parent event stream needed to classify who invoked a
     custom tool.
   - Draws on a Cursor Pro (or higher) API key. First-party ids (Grok,
