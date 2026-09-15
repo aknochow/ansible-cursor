@@ -142,19 +142,41 @@ class TestMain:
 
         fake_client = MagicMock()
         mock_sdk.Client.launch_bridge.return_value = fake_client
+        fake_module.stream_events = []
+        fake_module.execute_calls = [
+            ({"animal": "cat", "legs": 4}, SimpleNamespace(tool_call_id="t1")),
+        ]
 
-        def fake_prompt(prompt, options, client=None):
+        def fake_create(options, client=None):
             prompt_options.append(options)
             fake_module.prompt_client = client
-            if sdk_error is not None:
-                raise mock_sdk.CursorAgentError(str(sdk_error))
-            structured = params.get("structured_tool")
-            if structured and getattr(options, "local", None) and getattr(options.local, "custom_tools", None):
-                tool = next(iter(options.local.custom_tools.values()))
-                tool.execute({"animal": "cat", "legs": 4}, SimpleNamespace(tool_call_id="t1"))
-            return prompt_return
+            fake_agent = MagicMock()
+            fake_agent.agent_id = getattr(prompt_return, "agent_id", "agent-1")
+            fake_run = MagicMock()
 
-        mock_sdk.Agent.prompt = fake_prompt
+            def events():
+                return iter(list(fake_module.stream_events))
+
+            fake_run.events.side_effect = events
+
+            def wait():
+                if sdk_error is not None:
+                    raise mock_sdk.CursorAgentError(str(sdk_error))
+                structured = params.get("structured_tool")
+                if structured and getattr(options, "local", None) and getattr(
+                    options.local, "custom_tools", None
+                ):
+                    tool = next(iter(options.local.custom_tools.values()))
+                    for args, ctx in fake_module.execute_calls:
+                        tool.execute(args, ctx)
+                return prompt_return
+
+            fake_run.wait.side_effect = wait
+            fake_agent.send.return_value = fake_run
+            fake_module.fake_agent = fake_agent
+            return fake_agent
+
+        mock_sdk.Agent.create = fake_create
 
         import sys
 
@@ -344,6 +366,109 @@ class TestMain:
         agent_module.main()
         kwargs = fake_module.exit_json.call_args.kwargs
         assert kwargs["structured"] == {"animal": "cat", "legs": 4}
+        assert kwargs["structured_tool_calls"][0]["caller"] == "nested"
+        assert kwargs["structured_tool_calls"][0]["args"]["legs"] == 4
+
+    def test_two_executes_parent_then_nested_keeps_both(self, monkeypatch):
+        result = SimpleNamespace(
+            result="ok",
+            status="finished",
+            model=SimpleNamespace(id="grok-4.6"),
+            agent_id="parent-1",
+            id="r",
+            duration_ms=10,
+            usage=None,
+        )
+        params = dict(
+            prompt="spawn then report",
+            model="grok-4.6",
+            cwd="/tmp",
+            api_key="cursor_test",
+            effort=None,
+            tools=["mcp", "task"],
+            disallowed_tools=None,
+            structured_tool=dict(
+                name="report_findings",
+                description="submit",
+                input_schema={"type": "object"},
+            ),
+            agents=dict(security_lens=dict(description="lens", prompt="report")),
+            setting_sources=[],
+            mode=None,
+        )
+        agent_module, fake_module = self._install(monkeypatch, params, result)
+        fake_module.execute_calls = [
+            ({"findings": [], "from": "parent"}, SimpleNamespace(tool_call_id="parent-call")),
+            ({"findings": [{"file": "x"}], "from": "lens"}, SimpleNamespace(tool_call_id="nested-call")),
+        ]
+        fake_module.stream_events = [
+            SimpleNamespace(
+                sdk_message=SimpleNamespace(
+                    type="tool_call", name="mcp", call_id="parent-call", status="completed"
+                )
+            ),
+            SimpleNamespace(
+                sdk_message=SimpleNamespace(
+                    type="tool_call", name="task", call_id="task-1", status="completed"
+                )
+            ),
+        ]
+        agent_module.main()
+        kwargs = fake_module.exit_json.call_args.kwargs
+        calls = kwargs["structured_tool_calls"]
+        assert len(calls) == 2
+        assert calls[0]["caller"] == "parent"
+        assert calls[0]["agent_id"] == "parent-1"
+        assert calls[0]["args"]["from"] == "parent"
+        assert calls[1]["caller"] == "nested"
+        assert calls[1]["agent_id"] is None
+        assert calls[1]["args"]["from"] == "lens"
+        # last-wins structured must not hide the first execute
+        assert kwargs["structured"]["from"] == "lens"
+        assert calls[0]["args"]["from"] != kwargs["structured"]["from"] or len(calls) == 2
+
+    def test_parent_only_execute_classified_parent(self, monkeypatch):
+        result = SimpleNamespace(
+            result="ok",
+            status="finished",
+            model=SimpleNamespace(id="grok-4.6"),
+            agent_id="parent-1",
+            id="r",
+            duration_ms=10,
+            usage=None,
+        )
+        params = dict(
+            prompt="report yourself",
+            model="grok-4.6",
+            cwd="/tmp",
+            api_key="cursor_test",
+            effort=None,
+            tools=["mcp"],
+            disallowed_tools=None,
+            structured_tool=dict(
+                name="report_findings",
+                description="submit",
+                input_schema={"type": "object"},
+            ),
+            agents=None,
+            setting_sources=[],
+            mode=None,
+        )
+        agent_module, fake_module = self._install(monkeypatch, params, result)
+        fake_module.execute_calls = [
+            ({"findings": []}, SimpleNamespace(tool_call_id="parent-call")),
+        ]
+        fake_module.stream_events = [
+            SimpleNamespace(
+                sdk_message=SimpleNamespace(
+                    type="tool_call", name="mcp", call_id="parent-call", status="completed"
+                )
+            ),
+        ]
+        agent_module.main()
+        kwargs = fake_module.exit_json.call_args.kwargs
+        assert kwargs["structured_tool_calls"][0]["caller"] == "parent"
+        assert kwargs["structured_tool_calls"][0]["agent_id"] == "parent-1"
 
     def test_tools_empty_with_structured_fails(self, monkeypatch):
         params = dict(
@@ -521,6 +646,45 @@ class TestMain:
         fake_module.exit_json.assert_not_called()
         assert fake_module.prompt_options == []
         fake_module.sdk.Client.launch_bridge.assert_not_called()
+
+    def test_agent_close_failure_warns_and_still_returns(self, monkeypatch):
+        params = self._base_params()
+        agent_module, fake_module = self._install(monkeypatch, params, self._finished())
+        original_create = fake_module.sdk.Agent.create
+
+        def create_with_failing_close(options, client=None):
+            agent = original_create(options, client=client)
+            agent.close.side_effect = RuntimeError("close boom")
+            return agent
+
+        fake_module.sdk.Agent.create = create_with_failing_close
+        agent_module.main()
+        fake_module.exit_json.assert_called_once()
+        fake_module.fail_json.assert_not_called()
+        fake_module.warn.assert_called_once()
+        msg = fake_module.warn.call_args.args[0]
+        assert "agent.close()" in msg
+        assert "agent-1" in msg
+        assert "close boom" in msg
+
+    def test_agent_close_failure_does_not_mask_run_error(self, monkeypatch):
+        params = self._base_params()
+        agent_module, fake_module = self._install(
+            monkeypatch, params, self._finished(), sdk_error="Timed out waiting for bridge discovery"
+        )
+        original_create = fake_module.sdk.Agent.create
+
+        def create_with_failing_close(options, client=None):
+            agent = original_create(options, client=client)
+            agent.close.side_effect = RuntimeError("close boom")
+            return agent
+
+        fake_module.sdk.Agent.create = create_with_failing_close
+        agent_module.main()
+        fake_module.fail_json.assert_called_once()
+        assert "failed to start" in fake_module.fail_json.call_args.kwargs["msg"]
+        fake_module.warn.assert_called_once()
+        fake_module.exit_json.assert_not_called()
 
     def test_closes_client_when_prompt_raises(self, monkeypatch):
         params = self._base_params()

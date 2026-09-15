@@ -10,13 +10,22 @@ DOCUMENTATION = r"""
 module: agent
 short_description: Run a Cursor local agent via cursor-sdk
 description:
-  - One-shot C(Agent.prompt) against the official Cursor Python SDK.
+  - One-shot local run (C(Agent.create) + C(send) + event drain + C(wait))
+    against the official Cursor Python SDK. Not C(Agent.prompt), which
+    discards the parent event stream needed to classify who invoked a
+    custom tool.
   - Draws on a Cursor Pro (or higher) API key. First-party ids (Grok,
     Composer) use the Cursor Models pool; third-party ids (GPT, Claude,
     Gemini, ...) use the Other Models / API pool. Not an OpenAI-compatible
     chat-completions endpoint.
   - Structured results are optional custom-tool arguments, not generation-time
-    JSON Schema. The model can skip the tool; callers must assert on RV(structured).
+    JSON Schema. The model can skip the tool. RV(structured) is the last
+    execute (back-compat; last-call is not "the named subagent").
+    RV(structured_tool_calls) is every execute, classified C(parent) vs
+    C(nested) by joining C(tool_call_id) to the parent run's stream
+    C(tool_call.call_id) values. Nested custom-tool calls do not appear
+    on that stream in cursor-sdk 1.0.31. Callers that need the named
+    subagent's payload must select C(caller=nested), not last-wins.
   - Cloud agents are not implemented in this version.
   - When E(CURSOR_SDK_BRIDGE_URL) and E(CURSOR_SDK_BRIDGE_TOKEN) (or
     E(CURSOR_SDK_BRIDGE_AUTH_TOKEN)) are both set, the module attaches to
@@ -70,7 +79,8 @@ options:
     elements: str
   structured_tool:
     description:
-      - Optional custom tool whose arguments are returned as RV(structured).
+      - Optional custom tool. Every execute is returned in
+        RV(structured_tool_calls); RV(structured) remains the last execute.
       - Requires mcp to be offered (see O(tools)). Not generation-constrained;
         the model may finish without calling it.
     type: dict
@@ -205,9 +215,38 @@ usage_normalized:
       description: Total tokens for the run, or input plus output when omitted.
       type: int
 structured:
-  description: Arguments of the last O(structured_tool) call, when one happened.
+  description: >-
+    Arguments of the last O(structured_tool) execute (back-compat). This is
+    last-call, not the named subagent. Prefer RV(structured_tool_calls).
   type: dict
   returned: when structured_tool was set and the model called it
+structured_tool_calls:
+  description: >-
+    Every O(structured_tool) execute in order. caller is parent when the
+    execute tool_call_id appears on the parent run event stream (as an
+    mcp tool_call in cursor-sdk 1.0.31), otherwise nested. Nested
+    agent_id is null; CallCustomTool.agent_id is the tool owner, not the
+    caller. args is the tool argument object. Do not treat a field inside
+    args as caller identity.
+  type: list
+  returned: when structured_tool was set
+  elements: dict
+  contains:
+    name:
+      description: Custom tool name.
+      type: str
+    args:
+      description: Tool arguments for this execute.
+      type: dict
+    tool_call_id:
+      description: Host callback toolCallId, used to join the parent stream.
+      type: str
+    agent_id:
+      description: Parent agent id when caller is parent; null when nested.
+      type: str
+    caller:
+      description: parent or nested.
+      type: str
 effort_param:
   description: Catalog param actually sent for O(effort), when one was sent.
   type: dict
@@ -221,12 +260,16 @@ effort_param:
       type: str
 """
 
+from typing import Any
+
 from ansible.module_utils.basic import AnsibleModule
 from ansible_collections.aknochow.cursor.plugins.module_utils.cursor_client import (
     DEFAULT_BRIDGE_TIMEOUT,
     PROVIDER_ARGSPEC,
     AttachedBridgeIncomplete,
+    annotate_structured_calls,
     flatten_run,
+    parent_stream_tool_call_ids,
     resolve_attached_bridge,
     resolve_tools,
 )
@@ -267,8 +310,13 @@ def _structured_capture(structured_tool):
 
     captured = []
 
-    def execute(args, context):  # noqa: ARG001
-        captured.append(dict(args))
+    def execute(args, context):
+        captured.append(
+            {
+                "args": dict(args),
+                "tool_call_id": getattr(context, "tool_call_id", None),
+            }
+        )
         return "recorded"
 
     tool = CustomTool(
@@ -334,6 +382,42 @@ def _build_options(params, AgentOptions, LocalAgentOptions, ModelSelection, Mode
         kwargs["mode"] = params["mode"]
 
     return AgentOptions(**kwargs), captured, effort_param
+
+
+def _run_agent(
+    Agent: Any,
+    options: Any,
+    prompt: str,
+    client: Any,
+    module: AnsibleModule,
+) -> tuple[Any, set[str], str | None]:
+    """create + send + drain parent events + wait. Never Agent.prompt."""
+    agent = Agent.create(options, client=client)
+    try:
+        run = agent.send(prompt)
+        parent_ids = parent_stream_tool_call_ids(run)
+        result = run.wait()
+        return result, parent_ids, getattr(agent, "agent_id", None)
+    finally:
+        closer = getattr(agent, "close", None)
+        if callable(closer):
+            try:
+                closer()
+            except Exception as close_err:  # noqa: BLE001 — never mask the run result
+                module.warn(
+                    f"Cursor agent.close() failed (agent_id={getattr(agent, 'agent_id', None)}): {close_err}"
+                )
+
+
+def _structured_return(captured, tool_name, parent_agent_id, parent_stream_ids):
+    calls = annotate_structured_calls(
+        captured,
+        tool_name=tool_name,
+        parent_agent_id=parent_agent_id,
+        parent_stream_call_ids=parent_stream_ids,
+    )
+    last = captured[-1]["args"] if captured else None
+    return last, calls
 
 
 def _effort_return(effort_param):
@@ -423,7 +507,9 @@ def main():
                 timeout=module.params.get("bridge_timeout") or DEFAULT_BRIDGE_TIMEOUT,
                 allow_api_key_env_fallback=True,
             )
-        result = Agent.prompt(module.params["prompt"], options, client=client)
+        result, parent_stream_ids, created_agent_id = _run_agent(
+            Agent, options, module.params["prompt"], client, module
+        )
     except CursorAgentError as err:
         module.fail_json(msg=f"Cursor agent failed to start: {err}")
         return
@@ -437,20 +523,35 @@ def main():
             except Exception:  # noqa: BLE001 — never mask the run result
                 pass
 
+    tool_name = None
+    st = module.params.get("structured_tool")
+    if isinstance(st, dict):
+        tool_name = st.get("name")
+    parent_agent_id = created_agent_id or getattr(result, "agent_id", None)
+    structured, structured_calls = _structured_return(
+        captured, tool_name or "structured_tool", parent_agent_id, parent_stream_ids
+    )
+    extra = {}
+    if tool_name:
+        extra["structured_tool_calls"] = structured_calls
+
     status = getattr(result, "status", None)
     status_s = status if isinstance(status, str) else str(status)
     if status_s.split(".")[-1] == "error" or status_s == "error":
         module.fail_json(
             msg=f"Cursor run finished with status error (run_id={getattr(result, 'id', None)})",
-            **flatten_run(result, structured=(captured[-1] if captured else None)),
+            **flatten_run(
+                result, structured=structured, structured_tool_calls=extra.get("structured_tool_calls")
+            ),
             **_effort_return(effort_param),
         )
         return
 
-    structured = captured[-1] if captured else None
     module.exit_json(
         changed=False,
-        **flatten_run(result, structured=structured),
+        **flatten_run(
+            result, structured=structured, structured_tool_calls=extra.get("structured_tool_calls")
+        ),
         **_effort_return(effort_param),
     )
 
