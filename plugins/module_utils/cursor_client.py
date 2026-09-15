@@ -110,7 +110,66 @@ def normalize_usage(usage) -> dict[str, int]:
     )
 
 
-def flatten_run(result, *, structured=None) -> dict[str, Any]:
+def parent_stream_tool_call_ids(run) -> set[str]:
+    """Collect tool_call.call_id values from the parent run event stream.
+
+    cursor-sdk 1.0.31 does not put nested-subagent custom-tool calls on this
+    stream. A host CustomTool.execute whose tool_call_id is in this set was
+    invoked by the parent; one that is absent was invoked nested (the named
+    subagent). CallCustomTool.agent_id is the tool *owner*, not the caller.
+    """
+    ids: set[str] = set()
+    if run is None or not hasattr(run, "events"):
+        return ids
+    for event in run.events():
+        msg = getattr(event, "sdk_message", None)
+        if getattr(msg, "type", None) != "tool_call":
+            continue
+        call_id = getattr(msg, "call_id", None)
+        if call_id:
+            ids.add(call_id)
+    return ids
+
+
+def annotate_structured_calls(
+    captured,
+    *,
+    tool_name: str,
+    parent_agent_id: str | None,
+    parent_stream_call_ids: set[str],
+) -> list[dict[str, Any]]:
+    """Return every structured_tool execute, classified parent vs nested.
+
+    Last-wins is a lie when a parent and a subagent both call the tool.
+    Each record is {name, args, tool_call_id, agent_id, caller}.
+    caller is ``parent`` when tool_call_id is on the parent stream;
+    otherwise ``nested``. Nested agent_id is null: the SDK does not name
+    the child on execute context or CallCustomTool.
+    """
+    calls: list[dict[str, Any]] = []
+    for rec in captured or ():
+        if isinstance(rec, dict) and "args" in rec:
+            args = rec.get("args")
+            tool_call_id = rec.get("tool_call_id")
+        elif isinstance(rec, dict):
+            args = dict(rec)
+            tool_call_id = None
+        else:
+            continue
+        on_parent = bool(tool_call_id) and tool_call_id in parent_stream_call_ids
+        calls.append(
+            {
+                "name": tool_name,
+                "args": args,
+                "tool_call_id": tool_call_id,
+                "agent_id": parent_agent_id if on_parent else None,
+                "caller": "parent" if on_parent else "nested",
+            }
+        )
+    return calls
+
+
+def flatten_run(result, *, structured=None, structured_tool_calls=None) -> dict[str, Any]:
     """Flatten a cursor-sdk RunResult into this collection's return shape."""
     model = getattr(result, "model", None)
     resolved_model = None
@@ -132,6 +191,8 @@ def flatten_run(result, *, structured=None) -> dict[str, Any]:
     )
     if structured is not None:
         out["structured"] = structured
+    if structured_tool_calls is not None:
+        out["structured_tool_calls"] = structured_tool_calls
     return out
 
 

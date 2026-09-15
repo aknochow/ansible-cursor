@@ -19,7 +19,7 @@ third-party ids (GPT, Claude, Gemini, …) draw Other Models (the dashboard
 
 | Module | Purpose |
 |---|---|
-| `agent` | One-shot `Agent.prompt` (local runtime). Optional `structured_tool` captures custom-tool arguments as `structured`. Attaches to `CURSOR_SDK_BRIDGE_URL` + token when set. |
+| `agent` | One-shot local run (`Agent.create` + `send` + parent event drain + `wait`). Optional `structured_tool` captures **every** custom-tool execute as `structured_tool_calls` (parent vs nested). `structured` is still the last execute (back-compat; last-call is not the named subagent). Attaches to `CURSOR_SDK_BRIDGE_URL` + token when set. |
 | `bridge` | Playbook-owned sidecar: `state=present` double-forks `cursor-sdk-bridge` (not a child of ansible-playbook); `state=absent` reaps the pidfile. Never returns the token. |
 
 Cloud agents and a CLI (`agent -p`) wrapper are deliberately not in 0.1.0.
@@ -42,8 +42,13 @@ wheel layout and a two-collection smoke test.
 Measured against a private 2026-09-06 capability spike; notes are not in this repository.
 
 - **No generation-time JSON Schema.** `structured_tool` is a custom tool the
-  model *may* call. Assert on `structured` in the playbook, the same way
-  `aknochow.claude.agent` asserts when structured output is declined.
+  model *may* call. `structured` is the last execute. `structured_tool_calls`
+  is every execute with `caller` `parent` or `nested`, by joining
+  `tool_call_id` to the parent run's stream `tool_call.call_id`. Nested
+  custom-tool calls do not appear on that stream (cursor-sdk 1.0.31).
+  `CallCustomTool.agent_id` is the tool owner, not the caller. Do not treat
+  a field inside `args` as caller identity. Assert on `structured_tool_calls`
+  when a named subagent must be the source.
 - **A tools list without `mcp` hides custom tools.** `structured_tool`
   therefore defaults `tools` to `[mcp]`. Passing `tools: []` or
   `tools: [read]` (any explicit list that omits `mcp`) with

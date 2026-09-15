@@ -73,3 +73,48 @@ class TestResolveAttachedBridge:
             resolve_attached_bridge()
         assert "127.0.0.1" not in str(exc.value)
         assert "file-token" not in str(exc.value)
+
+
+class TestAnnotateStructuredCalls:
+    def test_parent_then_nested_keeps_both(self):
+        from ansible_collections.aknochow.cursor.plugins.module_utils.cursor_client import (
+            annotate_structured_calls,
+        )
+
+        captured = [
+            {"args": {"from": "parent"}, "tool_call_id": "parent-call"},
+            {"args": {"from": "lens"}, "tool_call_id": "nested-call"},
+        ]
+        calls = annotate_structured_calls(
+            captured,
+            tool_name="report_findings",
+            parent_agent_id="parent-1",
+            parent_stream_call_ids={"parent-call", "task-1"},
+        )
+        assert [c["caller"] for c in calls] == ["parent", "nested"]
+        assert calls[0]["agent_id"] == "parent-1"
+        assert calls[1]["agent_id"] is None
+        assert calls[0]["args"]["from"] == "parent"
+        assert calls[1]["args"]["from"] == "lens"
+
+    def test_parent_stream_ids_from_events(self):
+        from types import SimpleNamespace
+
+        from ansible_collections.aknochow.cursor.plugins.module_utils.cursor_client import (
+            parent_stream_tool_call_ids,
+        )
+
+        class FakeRun:
+            def events(self):
+                yield SimpleNamespace(
+                    sdk_message=SimpleNamespace(type="tool_call", call_id="a", name="mcp")
+                )
+                yield SimpleNamespace(
+                    sdk_message=SimpleNamespace(type="tool_call", call_id="a", name="mcp")
+                )
+                yield SimpleNamespace(
+                    sdk_message=SimpleNamespace(type="assistant", call_id=None)
+                )
+                yield SimpleNamespace(kind="done", sdk_message=None)
+
+        assert parent_stream_tool_call_ids(FakeRun()) == {"a"}

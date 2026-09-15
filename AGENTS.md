@@ -1,7 +1,9 @@
 # ansible-cursor: Project Context
 
 Ansible collection wrapping the official Cursor Python SDK (`cursor-sdk`).
-Two modules: `aknochow.cursor.agent` → `Agent.prompt` (local), and
+Two modules: `aknochow.cursor.agent` → `Agent.create` + `send` + parent
+event drain + `wait` (local; not `Agent.prompt`, which drops the stream
+used to classify who invoked a custom tool), and
 `aknochow.cursor.bridge` → playbook-owned daemonized `cursor-sdk-bridge`
 sidecar (`state: present` / `absent`).
 
@@ -14,8 +16,10 @@ sidecar (`state: present` / `absent`).
   it; never `pgrep -lf cursor-sdk-bridge` (argv can contain the token).
   Reap via the sidecar pidfile. Test presence/length of secrets, not contents.
 - Treat `structured` as generation-constrained JSON Schema. It is the last
-  custom-tool argument blob, or it is absent.
-- Call `Agent.prompt` on the SDK default client. Always pass an explicit
+  custom-tool execute, or it is absent. Last-call is not the named
+  subagent. Use `structured_tool_calls` (`caller=parent|nested`).
+- Call `Agent.prompt` (it drops the parent event stream). Use
+  `Agent.create` + `send` + drain `run.events()` + `wait` on an explicit
   `Client`: attach with `CURSOR_SDK_BRIDGE_URL` + token (or the `*_FILE`
   path variants) when a sidecar is already running, otherwise
   `Client.launch_bridge(workspace=cwd)` and `client.close()` in `finally`.
