@@ -647,6 +647,45 @@ class TestMain:
         assert fake_module.prompt_options == []
         fake_module.sdk.Client.launch_bridge.assert_not_called()
 
+    def test_agent_close_failure_warns_and_still_returns(self, monkeypatch):
+        params = self._base_params()
+        agent_module, fake_module = self._install(monkeypatch, params, self._finished())
+        original_create = fake_module.sdk.Agent.create
+
+        def create_with_failing_close(options, client=None):
+            agent = original_create(options, client=client)
+            agent.close.side_effect = RuntimeError("close boom")
+            return agent
+
+        fake_module.sdk.Agent.create = create_with_failing_close
+        agent_module.main()
+        fake_module.exit_json.assert_called_once()
+        fake_module.fail_json.assert_not_called()
+        fake_module.warn.assert_called_once()
+        msg = fake_module.warn.call_args.args[0]
+        assert "agent.close()" in msg
+        assert "agent-1" in msg
+        assert "close boom" in msg
+
+    def test_agent_close_failure_does_not_mask_run_error(self, monkeypatch):
+        params = self._base_params()
+        agent_module, fake_module = self._install(
+            monkeypatch, params, self._finished(), sdk_error="Timed out waiting for bridge discovery"
+        )
+        original_create = fake_module.sdk.Agent.create
+
+        def create_with_failing_close(options, client=None):
+            agent = original_create(options, client=client)
+            agent.close.side_effect = RuntimeError("close boom")
+            return agent
+
+        fake_module.sdk.Agent.create = create_with_failing_close
+        agent_module.main()
+        fake_module.fail_json.assert_called_once()
+        assert "failed to start" in fake_module.fail_json.call_args.kwargs["msg"]
+        fake_module.warn.assert_called_once()
+        fake_module.exit_json.assert_not_called()
+
     def test_closes_client_when_prompt_raises(self, monkeypatch):
         params = self._base_params()
         agent_module, fake_module = self._install(

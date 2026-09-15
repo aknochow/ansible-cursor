@@ -260,6 +260,8 @@ effort_param:
       type: str
 """
 
+from typing import Any
+
 from ansible.module_utils.basic import AnsibleModule
 from ansible_collections.aknochow.cursor.plugins.module_utils.cursor_client import (
     DEFAULT_BRIDGE_TIMEOUT,
@@ -382,7 +384,13 @@ def _build_options(params, AgentOptions, LocalAgentOptions, ModelSelection, Mode
     return AgentOptions(**kwargs), captured, effort_param
 
 
-def _run_agent(Agent, options, prompt, client):
+def _run_agent(
+    Agent: Any,
+    options: Any,
+    prompt: str,
+    client: Any,
+    module: AnsibleModule,
+) -> tuple[Any, set[str], str | None]:
     """create + send + drain parent events + wait. Never Agent.prompt."""
     agent = Agent.create(options, client=client)
     try:
@@ -395,8 +403,10 @@ def _run_agent(Agent, options, prompt, client):
         if callable(closer):
             try:
                 closer()
-            except Exception:  # noqa: BLE001 — never mask the run result
-                pass
+            except Exception as close_err:  # noqa: BLE001 — never mask the run result
+                module.warn(
+                    f"Cursor agent.close() failed (agent_id={getattr(agent, 'agent_id', None)}): {close_err}"
+                )
 
 
 def _structured_return(captured, tool_name, parent_agent_id, parent_stream_ids):
@@ -498,7 +508,7 @@ def main():
                 allow_api_key_env_fallback=True,
             )
         result, parent_stream_ids, created_agent_id = _run_agent(
-            Agent, options, module.params["prompt"], client
+            Agent, options, module.params["prompt"], client, module
         )
     except CursorAgentError as err:
         module.fail_json(msg=f"Cursor agent failed to start: {err}")
