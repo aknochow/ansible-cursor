@@ -19,7 +19,7 @@ third-party ids (GPT, Claude, Gemini, …) draw Other Models (the dashboard
 
 | Module | Purpose |
 |---|---|
-| `agent` | One-shot local run (`Agent.create` + `send` + parent event drain + `wait`). Optional `structured_tool` captures **every** custom-tool execute as `structured_tool_calls` (parent vs nested). `structured` is still the last execute (back-compat; last-call is not the named subagent). Attaches to `CURSOR_SDK_BRIDGE_URL` + token when set. |
+| `agent` | One-shot local run (`Agent.create` + `send` + parent event drain + terminal result from the handle). Optional `structured_tool` captures **every** custom-tool execute as `structured_tool_calls` (parent vs nested). After a full drain, `wait()` is not used when the handle is already terminal — WaitLiveRun on a finished run is the `status=error` flake. `structured` is still the last execute (back-compat; last-call is not the named subagent). Attaches to `CURSOR_SDK_BRIDGE_URL` + token when set. |
 | `bridge` | Playbook-owned sidecar: `state=present` double-forks `cursor-sdk-bridge` (not a child of ansible-playbook); `state=absent` reaps the pidfile. Never returns the token. |
 
 Cloud agents and a CLI (`agent -p`) wrapper are deliberately not in 0.1.0.
@@ -44,9 +44,13 @@ Measured against a private 2026-09-06 capability spike; notes are not in this re
 - **No generation-time JSON Schema.** `structured_tool` is a custom tool the
   model *may* call. `structured` is the last execute. `structured_tool_calls`
   is every execute with `caller` `parent` or `nested`, by joining
-  `tool_call_id` to the parent run's stream `tool_call.call_id`. Nested
-  custom-tool calls do not appear on that stream (cursor-sdk 1.0.31).
-  `CallCustomTool.agent_id` is the tool owner, not the caller. Do not treat
+  `tool_call_id` to the parent run's stream `tool_call.call_id` whose
+  `agent_id` is the parent. Nested custom-tool calls usually stay off that
+  stream (cursor-sdk 1.0.31); when they leak, they carry the child agent
+  id and stay `nested`. Host tools are re-registered under the live
+  `agent_id`, and unknown child ids fall back to the parent's tools so a
+  Task subagent can execute `report_findings`. `CallCustomTool.agent_id`
+  on the HTTP callback is the tool owner, not the caller. Do not treat
   a field inside `args` as caller identity. Assert on `structured_tool_calls`
   when a named subagent must be the source.
 - **A tools list without `mcp` hides custom tools.** `structured_tool`

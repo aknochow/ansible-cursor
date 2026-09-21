@@ -4,9 +4,15 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from ansible.module_utils.basic import env_fallback
+
+# cursor-sdk Run.status values that mean the Send stream is done. wait()
+# after a full events() drain must not WaitLiveRun these: that RPC on an
+# already-finished run is the status=error flake.
+_TERMINAL_RUN_STATUSES = frozenset({"finished", "error", "cancelled", "expired"})
 
 # SDK Client._default_client() attach env. Token values must never be logged.
 BRIDGE_URL_ENV = "CURSOR_SDK_BRIDGE_URL"
@@ -110,25 +116,146 @@ def normalize_usage(usage) -> dict[str, int]:
     )
 
 
-def parent_stream_tool_call_ids(run) -> set[str]:
-    """Collect tool_call.call_id values from the parent run event stream.
+def _status_leaf(status) -> str:
+    if status is None:
+        return ""
+    text = status if isinstance(status, str) else str(status)
+    return text.split(".")[-1]
 
-    cursor-sdk 1.0.31 does not put nested-subagent custom-tool calls on this
-    stream. A host CustomTool.execute whose tool_call_id is in this set was
-    invoked by the parent; one that is absent was invoked nested (the named
-    subagent). CallCustomTool.agent_id is the tool *owner*, not the caller.
+
+def is_terminal_run_status(status) -> bool:
+    return _status_leaf(status) in _TERMINAL_RUN_STATUSES
+
+
+def parent_stream_tool_call_ids(run, parent_agent_id: str | None = None) -> set[str]:
+    """Collect parent-agent tool_call.call_id values from the run event stream.
+
+    ``run.events()`` is consumable once (cursor-sdk 1.0.31). Callers that
+    still need ``wait()`` must use ``result_after_parent_stream`` so a full
+    drain does not WaitLiveRun an already-finished run.
+
+    Nested-subagent custom-tool calls usually stay off this stream. When they
+    leak onto it, they carry the child ``agent_id`` — those ids must not be
+    treated as parent, or a real nested execute is classified parent and the
+    named lens does not bind. CallCustomTool.agent_id on the HTTP callback is
+    the tool *owner* (parent), not the caller; the stream event's agent_id is
+    the caller.
     """
     ids: set[str] = set()
     if run is None or not hasattr(run, "events"):
         return ids
+    parent = parent_agent_id or getattr(run, "agent_id", None) or ""
     for event in run.events():
         msg = getattr(event, "sdk_message", None)
         if getattr(msg, "type", None) != "tool_call":
             continue
         call_id = getattr(msg, "call_id", None)
-        if call_id:
-            ids.add(call_id)
+        if not call_id:
+            continue
+        msg_agent = getattr(msg, "agent_id", None) or ""
+        if parent and msg_agent and msg_agent != parent:
+            continue
+        ids.add(call_id)
     return ids
+
+
+def result_after_parent_stream(run):
+    """Terminal result after a full ``events()`` drain. Never WaitLiveRun.
+
+    cursor-sdk ``Run.wait()`` drains leftover events, then returns
+    ``_terminal_result`` only when the result envelope's inner ``result``
+    field was a mapping. The usual wire shape has that field as the
+    assistant *string*, so a completed drain leaves ``_terminal_result``
+    unset and ``wait()`` calls WaitLiveRun on a run that already finished.
+    That is the ``status=error`` flake (and the hang in
+    https://forum.cursor.com/t/161858 when the drain was only partial).
+
+    After ``events()`` is exhausted the handle already holds status / text /
+    usage. Use those. Fall back to ``wait()`` only when the stream did not
+    reach a terminal status (still running, or the object is a test double).
+    """
+    terminal = getattr(run, "_terminal_result", None)
+    if terminal is not None:
+        return run.wait()
+    stream = getattr(run, "_event_stream", "unset")
+    buffer = getattr(run, "_buffer", None)
+    stream_exhausted = stream is None and not buffer
+    if stream_exhausted and is_terminal_run_status(getattr(run, "status", None)):
+        return SimpleNamespace(
+            result=getattr(run, "result", None) or "",
+            status=_status_leaf(getattr(run, "status", None)),
+            model=getattr(run, "model", None),
+            agent_id=getattr(run, "agent_id", None),
+            id=getattr(run, "id", None),
+            duration_ms=getattr(run, "duration_ms", None),
+            usage=getattr(run, "usage", None),
+        )
+    return run.wait()
+
+
+def tool_callback_server_of(client):
+    """Return the in-process ToolCallbackServer for this Client, if any."""
+    owned = getattr(client, "_owned_bridge", None)
+    if owned is not None:
+        server = getattr(owned, "_tool_callback_server", None)
+        if server is not None:
+            return server
+    owner = getattr(client, "_connect_tool_callback_owner", None) or client
+    return getattr(owner, "_connect_tool_callback_server", None)
+
+
+def reregister_live_agent_custom_tools(client, agent_id, custom_tools) -> None:
+    """Register host tools under the live agent id CreateAgent returned.
+
+    prepare_agent_options_custom_tools mints a UUID onto the CreateAgent
+    request. The server may return a different agentId. CallCustomTool then
+    looks up the live id and misses — structured_tool never fires, the named
+    lens never binds. Registering both ids is the fix; unknown child ids are
+    handled by install_subagent_custom_tool_fallback.
+    """
+    server = tool_callback_server_of(client)
+    if server is None or not custom_tools or not agent_id:
+        return
+    register = getattr(server, "register_agent", None)
+    if callable(register):
+        register(agent_id, custom_tools)
+
+
+def install_subagent_custom_tool_fallback(client) -> None:
+    """Resolve CallCustomTool for subagent ids against the parent's tools.
+
+    Host execute handlers are registered per parent agent_id. The vendor
+    node is documented to send the tool *owner* id, but nested Task
+    subagents sometimes send the child id. Lookup misses, the lens cannot
+    execute report_findings, and the run finishes unbound. One registered
+    parent mapping is enough: fall back to it when the asked id is unknown.
+    """
+    server = tool_callback_server_of(client)
+    if server is None or getattr(server, "_aknochow_subagent_fallback", False):
+        return
+    original = server._get_tools
+
+    def _get_tools(agent_id: str):
+        tools = original(agent_id)
+        if tools is not None:
+            return tools
+        lock = getattr(server, "_lock", None)
+        agents = getattr(server, "_agents", None)
+        if not isinstance(agents, dict) or not agents:
+            return None
+
+        def _fallback():
+            if agent_id in agents:
+                return None
+            return next(iter(agents.values()))
+
+        if lock is None:
+            return _fallback()
+        with lock:
+            return _fallback()
+
+    server._get_tools = _get_tools
+    server._aknochow_subagent_fallback = True
 
 
 def annotate_structured_calls(

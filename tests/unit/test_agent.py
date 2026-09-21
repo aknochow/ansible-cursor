@@ -557,6 +557,115 @@ class TestMain:
         fake_module.fail_json.assert_called_once()
         assert "status error" in fake_module.fail_json.call_args.kwargs["msg"]
 
+    def test_run_status_error_with_nested_execute_returns_payload(self, monkeypatch):
+        result = SimpleNamespace(
+            result="",
+            status="error",
+            model=SimpleNamespace(id="grok-4.6"),
+            agent_id="parent-1",
+            id="run-err",
+            duration_ms=1,
+            usage=None,
+        )
+        params = dict(
+            prompt="spawn then report",
+            model="grok-4.6",
+            cwd="/tmp",
+            api_key="k",
+            effort=None,
+            tools=["mcp", "task"],
+            disallowed_tools=None,
+            structured_tool=dict(
+                name="report_findings",
+                description="submit",
+                input_schema={"type": "object"},
+            ),
+            agents=dict(security_lens=dict(description="lens", prompt="report")),
+            setting_sources=[],
+            mode=None,
+        )
+        agent_module, fake_module = self._install(monkeypatch, params, result)
+        fake_module.execute_calls = [
+            (
+                {"findings": [{"file": "x"}], "prompt_nonce": "n"},
+                SimpleNamespace(tool_call_id="nested-call"),
+            ),
+        ]
+        fake_module.stream_events = [
+            SimpleNamespace(
+                sdk_message=SimpleNamespace(
+                    type="tool_call",
+                    name="task",
+                    call_id="task-1",
+                    status="completed",
+                    agent_id="parent-1",
+                )
+            ),
+        ]
+        agent_module.main()
+        fake_module.fail_json.assert_not_called()
+        fake_module.exit_json.assert_called_once()
+        kwargs = fake_module.exit_json.call_args.kwargs
+        assert kwargs["status"] == "error"
+        assert kwargs["structured_tool_calls"][0]["caller"] == "nested"
+        assert kwargs["structured"]["findings"][0]["file"] == "x"
+
+    def test_nested_mcp_on_parent_stream_stays_nested(self, monkeypatch):
+        result = SimpleNamespace(
+            result="ok",
+            status="finished",
+            model=SimpleNamespace(id="grok-4.6"),
+            agent_id="parent-1",
+            id="r",
+            duration_ms=10,
+            usage=None,
+        )
+        params = dict(
+            prompt="spawn then report",
+            model="grok-4.6",
+            cwd="/tmp",
+            api_key="k",
+            effort=None,
+            tools=["mcp", "task"],
+            disallowed_tools=None,
+            structured_tool=dict(
+                name="report_findings",
+                description="submit",
+                input_schema={"type": "object"},
+            ),
+            agents=dict(security_lens=dict(description="lens", prompt="report")),
+            setting_sources=[],
+            mode=None,
+        )
+        agent_module, fake_module = self._install(monkeypatch, params, result)
+        fake_module.execute_calls = [
+            ({"findings": [{"file": "x"}], "from": "lens"}, SimpleNamespace(tool_call_id="nested-call")),
+        ]
+        fake_module.stream_events = [
+            SimpleNamespace(
+                sdk_message=SimpleNamespace(
+                    type="tool_call",
+                    name="task",
+                    call_id="task-1",
+                    status="completed",
+                    agent_id="parent-1",
+                )
+            ),
+            SimpleNamespace(
+                sdk_message=SimpleNamespace(
+                    type="tool_call",
+                    name="mcp",
+                    call_id="nested-call",
+                    status="completed",
+                    agent_id="child-9",
+                )
+            ),
+        ]
+        agent_module.main()
+        kwargs = fake_module.exit_json.call_args.kwargs
+        assert kwargs["structured_tool_calls"][0]["caller"] == "nested"
+        assert kwargs["structured_tool_calls"][0]["agent_id"] is None
+
     def test_empty_structured_tool_fails_without_traceback(self, monkeypatch):
         params = self._base_params(structured_tool={})
         agent_module, fake_module = self._install(monkeypatch, params, SimpleNamespace())
