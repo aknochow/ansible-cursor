@@ -159,6 +159,54 @@ class TestAnnotateStructuredCalls:
         assert calls[0]["caller"] == "nested"
         assert calls[0]["agent_id"] is None
 
+    def test_stream_notes_observed_child_and_rejects_unseen_id(self):
+        import threading
+        from types import SimpleNamespace
+
+        from ansible_collections.aknochow.cursor.plugins.module_utils.cursor_client import (
+            clear_subagent_custom_tool_fallback,
+            install_subagent_custom_tool_fallback,
+            parent_stream_tool_call_ids,
+        )
+
+        parent_tools = {"report_findings": object()}
+
+        class Server:
+            def __init__(self):
+                self._lock = threading.Lock()
+                self._agents = {"parent-1": parent_tools}
+
+            def _get_tools(self, agent_id):
+                with self._lock:
+                    return self._agents.get(agent_id)
+
+        server = Server()
+        client = SimpleNamespace(
+            _owned_bridge=SimpleNamespace(_tool_callback_server=server),
+            _connect_tool_callback_owner=None,
+            _connect_tool_callback_server=None,
+        )
+
+        class FakeRun:
+            agent_id = "parent-1"
+
+            def events(self):
+                yield SimpleNamespace(
+                    sdk_message=SimpleNamespace(
+                        type="task",
+                        agent_id="child-9",
+                        call_id=None,
+                    )
+                )
+
+        install_subagent_custom_tool_fallback(client, "parent-1")
+        FakeRun.client = client
+        assert parent_stream_tool_call_ids(FakeRun(), parent_agent_id="parent-1") == set()
+        assert server._get_tools("child-9") is parent_tools
+        assert server._get_tools("stale-callback") is None
+        clear_subagent_custom_tool_fallback(client, "parent-1")
+        assert server._get_tools("child-9") is None
+
 
 class TestResultAfterParentStream:
     def test_exhausted_terminal_handle_does_not_wait(self):
@@ -232,6 +280,7 @@ class TestSubagentToolFallback:
 
         from ansible_collections.aknochow.cursor.plugins.module_utils.cursor_client import (
             install_subagent_custom_tool_fallback,
+            note_subagent_child,
             reregister_live_agent_custom_tools,
             tool_callback_server_of,
         )
@@ -261,6 +310,8 @@ class TestSubagentToolFallback:
         assert server._get_tools("live-agent-1") is parent_tools
         install_subagent_custom_tool_fallback(client, "live-agent-1")
         assert server._get_tools("minted-uuid") is parent_tools
+        assert server._get_tools("child-subagent") is None
+        note_subagent_child(client, "live-agent-1", "child-subagent")
         assert server._get_tools("child-subagent") is parent_tools
         install_subagent_custom_tool_fallback(client, "live-agent-1")
         assert server._aknochow_subagent_fallback is True
@@ -272,6 +323,7 @@ class TestSubagentToolFallback:
         from ansible_collections.aknochow.cursor.plugins.module_utils.cursor_client import (
             clear_subagent_custom_tool_fallback,
             install_subagent_custom_tool_fallback,
+            note_subagent_child,
         )
 
         other_tools = {"report_findings": object()}
@@ -298,10 +350,11 @@ class TestSubagentToolFallback:
             _connect_tool_callback_server=None,
         )
         install_subagent_custom_tool_fallback(client, "live-agent-1")
+        assert server._get_tools("stale-callback") is None
+        note_subagent_child(client, "live-agent-1", "child-subagent")
         assert server._get_tools("child-subagent") is parent_tools
+        assert server._get_tools("stale-callback") is None
         install_subagent_custom_tool_fallback(client, "other-run")
-        assert server._get_tools("child-subagent") is None
-        clear_subagent_custom_tool_fallback(client, "other-run")
         assert server._get_tools("child-subagent") is parent_tools
         clear_subagent_custom_tool_fallback(client, "live-agent-1")
         assert server._get_tools("child-subagent") is None

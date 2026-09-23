@@ -81,7 +81,7 @@ PROVIDER_ARGSPEC = dict(
 )
 
 
-def normalize_usage(usage) -> dict[str, int]:
+def normalize_usage(usage: Any) -> dict[str, int]:
     """Map cursor-sdk TokenUsage onto plaibook's usage_normalized keys.
 
     Missing values default to 0 so consumers can rely on every key existing.
@@ -116,18 +116,18 @@ def normalize_usage(usage) -> dict[str, int]:
     )
 
 
-def _status_leaf(status) -> str:
+def _status_leaf(status: Any) -> str:
     if status is None:
         return ""
     text = status if isinstance(status, str) else str(status)
     return text.split(".")[-1]
 
 
-def is_terminal_run_status(status) -> bool:
+def is_terminal_run_status(status: Any) -> bool:
     return _status_leaf(status) in _TERMINAL_RUN_STATUSES
 
 
-def parent_stream_tool_call_ids(run, parent_agent_id: str | None = None) -> set[str]:
+def parent_stream_tool_call_ids(run: Any, parent_agent_id: str | None = None) -> set[str]:
     """Collect parent-agent tool_call.call_id values from the run event stream.
 
     ``run.events()`` is consumable once (cursor-sdk 1.0.31). Callers that
@@ -145,21 +145,24 @@ def parent_stream_tool_call_ids(run, parent_agent_id: str | None = None) -> set[
     if run is None or not hasattr(run, "events"):
         return ids
     parent = parent_agent_id or getattr(run, "agent_id", None) or ""
+    client = getattr(run, "client", None)
     for event in run.events():
         msg = getattr(event, "sdk_message", None)
+        msg_agent = getattr(msg, "agent_id", None) or ""
+        if parent and msg_agent and msg_agent != parent:
+            note_subagent_child(client, parent, msg_agent)
         if getattr(msg, "type", None) != "tool_call":
             continue
         call_id = getattr(msg, "call_id", None)
         if not call_id:
             continue
-        msg_agent = getattr(msg, "agent_id", None) or ""
         if parent and msg_agent and msg_agent != parent:
             continue
         ids.add(call_id)
     return ids
 
 
-def result_after_parent_stream(run):
+def result_after_parent_stream(run: Any) -> Any:
     """Terminal result after a full ``events()`` drain. Never WaitLiveRun.
 
     cursor-sdk ``Run.wait()`` drains leftover events, then returns
@@ -193,7 +196,7 @@ def result_after_parent_stream(run):
     return run.wait()
 
 
-def tool_callback_server_of(client):
+def tool_callback_server_of(client: Any) -> Any:
     """Return the in-process ToolCallbackServer for this Client, if any."""
     owned = getattr(client, "_owned_bridge", None)
     if owned is not None:
@@ -204,7 +207,7 @@ def tool_callback_server_of(client):
     return getattr(owner, "_connect_tool_callback_server", None)
 
 
-def reregister_live_agent_custom_tools(client, agent_id, custom_tools) -> None:
+def reregister_live_agent_custom_tools(client: Any, agent_id: str | None, custom_tools: Any) -> None:
     """Register host tools under the live agent id CreateAgent returned.
 
     prepare_agent_options_custom_tools mints a UUID onto the CreateAgent
@@ -221,48 +224,77 @@ def reregister_live_agent_custom_tools(client, agent_id, custom_tools) -> None:
         register(agent_id, custom_tools)
 
 
-def install_subagent_custom_tool_fallback(client, parent_agent_id: str | None) -> None:
-    """Resolve unknown child CallCustomTool ids against this parent only.
+def _fallback_parents(server: Any) -> set[str]:
+    parents = getattr(server, "_aknochow_fallback_parents", None)
+    if not isinstance(parents, set):
+        parents = set()
+        server._aknochow_fallback_parents = parents
+    return parents
+
+
+def _fallback_children(server: Any) -> dict[str, str]:
+    children = getattr(server, "_aknochow_fallback_children", None)
+    if not isinstance(children, dict):
+        children = {}
+        server._aknochow_fallback_children = children
+    return children
+
+
+def note_subagent_child(client: Any, parent_agent_id: str | None, child_agent_id: str | None) -> None:
+    """Record a child id observed on this parent's stream.
+
+    CallCustomTool for that child may then use this parent's tools. An id
+    that was never observed is not a child of this run and is rejected.
+    """
+    server = tool_callback_server_of(client)
+    if server is None or not parent_agent_id or not child_agent_id:
+        return
+    if child_agent_id == parent_agent_id:
+        return
+    if parent_agent_id not in _fallback_parents(server):
+        return
+    _fallback_children(server)[child_agent_id] = parent_agent_id
+
+
+def install_subagent_custom_tool_fallback(client: Any, parent_agent_id: str | None) -> None:
+    """Resolve observed child CallCustomTool ids against that parent only.
 
     Host execute handlers are registered per parent agent_id. The vendor
     node is documented to send the tool *owner* id, but nested Task
     subagents sometimes send the child id. Lookup misses, the lens cannot
     execute report_findings, and the run finishes unbound.
 
-    An unknown id uses this parent's tools only while it is the sole live
-    fallback parent on the callback server. A shared server with two live
-    parents returns None instead of the first registered mapping, so one
-    run cannot execute another's tools. Clear the parent when the run ends.
+    Only a child id seen on this parent's event stream is mapped to this
+    parent's tools. Any other unknown id is rejected, including when this
+    parent is the only live one, so a stale callback cannot use its tools.
+    Clear the parent and its children when the run ends.
     """
     server = tool_callback_server_of(client)
     if server is None or not parent_agent_id:
         return
-    parents = getattr(server, "_aknochow_fallback_parents", None)
-    if not isinstance(parents, set):
-        parents = set()
-        server._aknochow_fallback_parents = parents
-    parents.add(parent_agent_id)
+    _fallback_parents(server).add(parent_agent_id)
     if getattr(server, "_aknochow_subagent_fallback", False):
         return
     original = server._get_tools
 
-    def _get_tools(agent_id: str):
+    def _get_tools(agent_id: str) -> Any:
         tools = original(agent_id)
         if tools is not None:
             return tools
         lock = getattr(server, "_lock", None)
         agents = getattr(server, "_agents", None)
         allowed = getattr(server, "_aknochow_fallback_parents", None)
-        if not isinstance(agents, dict) or not isinstance(allowed, set):
+        children = getattr(server, "_aknochow_fallback_children", None)
+        if not isinstance(agents, dict) or not isinstance(allowed, set) or not isinstance(children, dict):
             return None
 
-        def _fallback():
+        def _fallback() -> Any:
             if agent_id in agents:
                 return None
-            live = [pid for pid in allowed if pid in agents]
-            if len(live) != 1:
+            parent_id = children.get(agent_id)
+            if not isinstance(parent_id, str) or parent_id not in allowed or parent_id not in agents:
                 return None
-            return agents.get(live[0])
+            return agents.get(parent_id)
 
         if lock is None:
             return _fallback()
@@ -273,14 +305,19 @@ def install_subagent_custom_tool_fallback(client, parent_agent_id: str | None) -
     server._aknochow_subagent_fallback = True
 
 
-def clear_subagent_custom_tool_fallback(client, parent_agent_id: str | None) -> None:
-    """Drop this parent from the unknown-child fallback set when its run ends."""
+def clear_subagent_custom_tool_fallback(client: Any, parent_agent_id: str | None) -> None:
+    """Drop this parent and its observed children when the run ends."""
     server = tool_callback_server_of(client)
     if server is None or not parent_agent_id:
         return
     parents = getattr(server, "_aknochow_fallback_parents", None)
     if isinstance(parents, set):
         parents.discard(parent_agent_id)
+    children = getattr(server, "_aknochow_fallback_children", None)
+    if isinstance(children, dict):
+        for child, parent in list(children.items()):
+            if parent == parent_agent_id:
+                del children[child]
 
 
 def annotate_structured_calls(
@@ -321,7 +358,7 @@ def annotate_structured_calls(
     return calls
 
 
-def flatten_run(result, *, structured=None, structured_tool_calls=None) -> dict[str, Any]:
+def flatten_run(result: Any, *, structured: Any = None, structured_tool_calls: Any = None) -> dict[str, Any]:
     """Flatten a cursor-sdk RunResult into this collection's return shape."""
     model = getattr(result, "model", None)
     resolved_model = None
@@ -348,7 +385,7 @@ def flatten_run(result, *, structured=None, structured_tool_calls=None) -> dict[
     return out
 
 
-def resolve_tools(tools, structured_tool) -> list[str] | None:
+def resolve_tools(tools: list[str] | None, structured_tool: Any) -> list[str] | None:
     """Choose the SDK tools allowlist.
 
     Live spike 2026-09-06: tools=[] hides CustomTool (mcp is stripped).

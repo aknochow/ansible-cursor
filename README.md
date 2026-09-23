@@ -48,9 +48,10 @@ Measured against a private 2026-09-06 capability spike; notes are not in this re
   `agent_id` is the parent. Nested custom-tool calls usually stay off that
   stream (cursor-sdk 1.0.31); when they leak, they carry the child agent
   id and stay `nested`. Host tools are re-registered under the live
-  `agent_id`, and an unknown child id uses that parent's tools only while
-  it is the sole live parent, so a Task subagent can execute
-  `report_findings`. A shared bridge with two live parents does not guess. `CallCustomTool.agent_id`
+  `agent_id`. A child id uses that parent's tools only after the parent
+  stream has shown that id, so a Task subagent can execute
+  `report_findings`. Any other unknown id is rejected, and the mapping
+  is removed when the run ends. `CallCustomTool.agent_id`
   on the HTTP callback is the tool owner, not the caller. Do not treat
   a field inside `args` as caller identity. Assert on `structured_tool_calls`
   when a named subagent must be the source.
