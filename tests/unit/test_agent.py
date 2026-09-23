@@ -795,6 +795,20 @@ class TestMain:
         fake_module.warn.assert_called_once()
         fake_module.exit_json.assert_not_called()
 
+    def test_registration_failure_still_closes_agent(self, monkeypatch):
+        params = self._base_params()
+        agent_module, fake_module = self._install(monkeypatch, params, self._finished())
+
+        def boom(*_args, **_kwargs):
+            raise RuntimeError("register boom")
+
+        monkeypatch.setattr(agent_module, "reregister_live_agent_custom_tools", boom)
+        agent_module.main()
+        fake_module.fail_json.assert_called_once()
+        assert "register boom" in fake_module.fail_json.call_args.kwargs["msg"]
+        fake_module.fake_agent.close.assert_called_once()
+        fake_module.exit_json.assert_not_called()
+
     def test_closes_client_when_prompt_raises(self, monkeypatch):
         params = self._base_params()
         agent_module, fake_module = self._install(

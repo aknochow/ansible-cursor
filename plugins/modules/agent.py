@@ -406,9 +406,9 @@ def _run_agent(
     live_id = getattr(agent, "agent_id", None)
     local = getattr(options, "local", None)
     custom_tools = getattr(local, "custom_tools", None) if local is not None else None
-    reregister_live_agent_custom_tools(client, live_id, custom_tools)
-    install_subagent_custom_tool_fallback(client, live_id)
     try:
+        reregister_live_agent_custom_tools(client, live_id, custom_tools)
+        install_subagent_custom_tool_fallback(client, live_id)
         run = agent.send(prompt)
         parent_ids = parent_stream_tool_call_ids(run, parent_agent_id=live_id)
         result = result_after_parent_stream(run)
