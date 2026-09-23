@@ -274,6 +274,7 @@ from ansible_collections.aknochow.cursor.plugins.module_utils.cursor_client impo
     PROVIDER_ARGSPEC,
     AttachedBridgeIncomplete,
     annotate_structured_calls,
+    clear_subagent_custom_tool_fallback,
     flatten_run,
     install_subagent_custom_tool_fallback,
     parent_stream_tool_call_ids,
@@ -406,13 +407,14 @@ def _run_agent(
     local = getattr(options, "local", None)
     custom_tools = getattr(local, "custom_tools", None) if local is not None else None
     reregister_live_agent_custom_tools(client, live_id, custom_tools)
-    install_subagent_custom_tool_fallback(client)
+    install_subagent_custom_tool_fallback(client, live_id)
     try:
         run = agent.send(prompt)
         parent_ids = parent_stream_tool_call_ids(run, parent_agent_id=live_id)
         result = result_after_parent_stream(run)
         return result, parent_ids, live_id
     finally:
+        clear_subagent_custom_tool_fallback(client, live_id)
         closer = getattr(agent, "close", None)
         if callable(closer):
             try:

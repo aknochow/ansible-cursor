@@ -259,8 +259,49 @@ class TestSubagentToolFallback:
         assert tool_callback_server_of(client) is server
         reregister_live_agent_custom_tools(client, "live-agent-1", parent_tools)
         assert server._get_tools("live-agent-1") is parent_tools
-        install_subagent_custom_tool_fallback(client)
+        install_subagent_custom_tool_fallback(client, "live-agent-1")
         assert server._get_tools("minted-uuid") is parent_tools
         assert server._get_tools("child-subagent") is parent_tools
-        install_subagent_custom_tool_fallback(client)
+        install_subagent_custom_tool_fallback(client, "live-agent-1")
         assert server._aknochow_subagent_fallback is True
+
+    def test_unknown_child_stays_on_its_parent_when_another_run_is_first(self):
+        import threading
+        from types import SimpleNamespace
+
+        from ansible_collections.aknochow.cursor.plugins.module_utils.cursor_client import (
+            clear_subagent_custom_tool_fallback,
+            install_subagent_custom_tool_fallback,
+        )
+
+        other_tools = {"report_findings": object()}
+        parent_tools = {"report_findings": object()}
+
+        class Server:
+            def __init__(self):
+                self._lock = threading.Lock()
+                self._agents = {}
+
+            def register_agent(self, agent_id, tools):
+                self._agents[agent_id] = tools
+
+            def _get_tools(self, agent_id):
+                with self._lock:
+                    return self._agents.get(agent_id)
+
+        server = Server()
+        server.register_agent("other-run", other_tools)
+        server.register_agent("live-agent-1", parent_tools)
+        client = SimpleNamespace(
+            _owned_bridge=SimpleNamespace(_tool_callback_server=server),
+            _connect_tool_callback_owner=None,
+            _connect_tool_callback_server=None,
+        )
+        install_subagent_custom_tool_fallback(client, "live-agent-1")
+        assert server._get_tools("child-subagent") is parent_tools
+        install_subagent_custom_tool_fallback(client, "other-run")
+        assert server._get_tools("child-subagent") is None
+        clear_subagent_custom_tool_fallback(client, "other-run")
+        assert server._get_tools("child-subagent") is parent_tools
+        clear_subagent_custom_tool_fallback(client, "live-agent-1")
+        assert server._get_tools("child-subagent") is None

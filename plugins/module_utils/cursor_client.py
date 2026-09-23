@@ -221,17 +221,28 @@ def reregister_live_agent_custom_tools(client, agent_id, custom_tools) -> None:
         register(agent_id, custom_tools)
 
 
-def install_subagent_custom_tool_fallback(client) -> None:
-    """Resolve CallCustomTool for subagent ids against the parent's tools.
+def install_subagent_custom_tool_fallback(client, parent_agent_id: str | None) -> None:
+    """Resolve unknown child CallCustomTool ids against this parent only.
 
     Host execute handlers are registered per parent agent_id. The vendor
     node is documented to send the tool *owner* id, but nested Task
     subagents sometimes send the child id. Lookup misses, the lens cannot
-    execute report_findings, and the run finishes unbound. One registered
-    parent mapping is enough: fall back to it when the asked id is unknown.
+    execute report_findings, and the run finishes unbound.
+
+    An unknown id uses this parent's tools only while it is the sole live
+    fallback parent on the callback server. A shared server with two live
+    parents returns None instead of the first registered mapping, so one
+    run cannot execute another's tools. Clear the parent when the run ends.
     """
     server = tool_callback_server_of(client)
-    if server is None or getattr(server, "_aknochow_subagent_fallback", False):
+    if server is None or not parent_agent_id:
+        return
+    parents = getattr(server, "_aknochow_fallback_parents", None)
+    if not isinstance(parents, set):
+        parents = set()
+        server._aknochow_fallback_parents = parents
+    parents.add(parent_agent_id)
+    if getattr(server, "_aknochow_subagent_fallback", False):
         return
     original = server._get_tools
 
@@ -241,13 +252,17 @@ def install_subagent_custom_tool_fallback(client) -> None:
             return tools
         lock = getattr(server, "_lock", None)
         agents = getattr(server, "_agents", None)
-        if not isinstance(agents, dict) or not agents:
+        allowed = getattr(server, "_aknochow_fallback_parents", None)
+        if not isinstance(agents, dict) or not isinstance(allowed, set):
             return None
 
         def _fallback():
             if agent_id in agents:
                 return None
-            return next(iter(agents.values()))
+            live = [pid for pid in allowed if pid in agents]
+            if len(live) != 1:
+                return None
+            return agents.get(live[0])
 
         if lock is None:
             return _fallback()
@@ -256,6 +271,16 @@ def install_subagent_custom_tool_fallback(client) -> None:
 
     server._get_tools = _get_tools
     server._aknochow_subagent_fallback = True
+
+
+def clear_subagent_custom_tool_fallback(client, parent_agent_id: str | None) -> None:
+    """Drop this parent from the unknown-child fallback set when its run ends."""
+    server = tool_callback_server_of(client)
+    if server is None or not parent_agent_id:
+        return
+    parents = getattr(server, "_aknochow_fallback_parents", None)
+    if isinstance(parents, set):
+        parents.discard(parent_agent_id)
 
 
 def annotate_structured_calls(
