@@ -19,7 +19,8 @@ sidecar (`state: present` / `absent`).
   custom-tool execute, or it is absent. Last-call is not the named
   subagent. Use `structured_tool_calls` (`caller=parent|nested`).
 - Call `Agent.prompt` (it drops the parent event stream). Use
-  `Agent.create` + `send` + drain `run.events()` + `wait` on an explicit
+  `Agent.create` + `send` + drain `run.events()` + terminal result from
+  the handle (do not WaitLiveRun a drained finished run) on an explicit
   `Client`: attach with `CURSOR_SDK_BRIDGE_URL` + token (or the `*_FILE`
   path variants) when a sidecar is already running, otherwise
   `Client.launch_bridge(workspace=cwd)` and `client.close()` in `finally`.

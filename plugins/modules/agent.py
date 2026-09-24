@@ -10,10 +10,11 @@ DOCUMENTATION = r"""
 module: agent
 short_description: Run a Cursor local agent via cursor-sdk
 description:
-  - One-shot local run (C(Agent.create) + C(send) + event drain + C(wait))
-    against the official Cursor Python SDK. Not C(Agent.prompt), which
-    discards the parent event stream needed to classify who invoked a
-    custom tool.
+  - One-shot local run (C(Agent.create) + C(send) + event drain + terminal
+    result from the handle). Not C(Agent.prompt), which discards the parent
+    event stream needed to classify who invoked a custom tool. After a full
+    drain, C(wait) is not used when the handle is already terminal —
+    WaitLiveRun on a finished run is the C(status=error) flake.
   - Draws on a Cursor Pro (or higher) API key. First-party ids (Grok,
     Composer) use the Cursor Models pool; third-party ids (GPT, Claude,
     Gemini, ...) use the Other Models / API pool. Not an OpenAI-compatible
@@ -23,9 +24,13 @@ description:
     execute (back-compat; last-call is not "the named subagent").
     RV(structured_tool_calls) is every execute, classified C(parent) vs
     C(nested) by joining C(tool_call_id) to the parent run's stream
-    C(tool_call.call_id) values. Nested custom-tool calls do not appear
-    on that stream in cursor-sdk 1.0.31. Callers that need the named
-    subagent's payload must select C(caller=nested), not last-wins.
+    C(tool_call.call_id) values whose C(agent_id) is the parent. Nested
+    custom-tool calls usually stay off that stream; when they leak, they
+    carry the child agent id and stay C(nested). Callers that need the
+    named subagent's payload must select C(caller=nested), not last-wins.
+    Host custom tools are re-registered under the live C(agent_id) and
+    unknown child ids fall back to the parent's tools so a Task subagent
+    can actually execute the tool.
   - Cloud agents are not implemented in this version.
   - When E(CURSOR_SDK_BRIDGE_URL) and E(CURSOR_SDK_BRIDGE_TOKEN) (or
     E(CURSOR_SDK_BRIDGE_AUTH_TOKEN)) are both set, the module attaches to
@@ -223,11 +228,12 @@ structured:
 structured_tool_calls:
   description: >-
     Every O(structured_tool) execute in order. caller is parent when the
-    execute tool_call_id appears on the parent run event stream (as an
-    mcp tool_call in cursor-sdk 1.0.31), otherwise nested. Nested
-    agent_id is null; CallCustomTool.agent_id is the tool owner, not the
-    caller. args is the tool argument object. Do not treat a field inside
-    args as caller identity.
+    execute tool_call_id appears on the parent run event stream as a
+    parent-agent mcp tool_call, otherwise nested. Nested agent_id is
+    null on the execute record; CallCustomTool.agent_id on the wire is
+    the tool owner, not the caller. Stream events that leak a nested mcp
+    call carry the child agent id and stay nested. args is the tool
+    argument object. Do not treat a field inside args as caller identity.
   type: list
   returned: when structured_tool was set
   elements: dict
@@ -268,10 +274,14 @@ from ansible_collections.aknochow.cursor.plugins.module_utils.cursor_client impo
     PROVIDER_ARGSPEC,
     AttachedBridgeIncomplete,
     annotate_structured_calls,
+    clear_subagent_custom_tool_fallback,
     flatten_run,
+    install_subagent_custom_tool_fallback,
     parent_stream_tool_call_ids,
+    reregister_live_agent_custom_tools,
     resolve_attached_bridge,
     resolve_tools,
+    result_after_parent_stream,
 )
 from ansible_collections.aknochow.cursor.plugins.module_utils.model_params import (
     OPERATOR_EFFORT_VALUES,
@@ -391,14 +401,20 @@ def _run_agent(
     client: Any,
     module: AnsibleModule,
 ) -> tuple[Any, set[str], str | None]:
-    """create + send + drain parent events + wait. Never Agent.prompt."""
+    """create + send + drain parent events + terminal result. Never Agent.prompt."""
     agent = Agent.create(options, client=client)
+    live_id = getattr(agent, "agent_id", None)
+    local = getattr(options, "local", None)
+    custom_tools = getattr(local, "custom_tools", None) if local is not None else None
     try:
+        reregister_live_agent_custom_tools(client, live_id, custom_tools)
+        install_subagent_custom_tool_fallback(client, live_id)
         run = agent.send(prompt)
-        parent_ids = parent_stream_tool_call_ids(run)
-        result = run.wait()
-        return result, parent_ids, getattr(agent, "agent_id", None)
+        parent_ids = parent_stream_tool_call_ids(run, parent_agent_id=live_id)
+        result = result_after_parent_stream(run)
+        return result, parent_ids, live_id
     finally:
+        clear_subagent_custom_tool_fallback(client, live_id)
         closer = getattr(agent, "close", None)
         if callable(closer):
             try:
@@ -537,7 +553,27 @@ def main():
 
     status = getattr(result, "status", None)
     status_s = status if isinstance(status, str) else str(status)
-    if status_s.split(".")[-1] == "error" or status_s == "error":
+    nested_calls = [
+        call
+        for call in structured_calls
+        if isinstance(call, dict) and call.get("caller") == "nested"
+    ]
+    if status_s.split(".")[-1] == "error":
+        # Nested execute already happened. Parent status=error after that is
+        # the WaitLiveRun-after-drain flake, not a missing lens. Returning
+        # the payload lets the caller bind; fail_json here used to throw it
+        # away (playbook rescue saw only the msg).
+        if nested_calls:
+            module.exit_json(
+                changed=False,
+                **flatten_run(
+                    result,
+                    structured=structured,
+                    structured_tool_calls=extra.get("structured_tool_calls"),
+                ),
+                **_effort_return(effort_param),
+            )
+            return
         module.fail_json(
             msg=f"Cursor run finished with status error (run_id={getattr(result, 'id', None)})",
             **flatten_run(

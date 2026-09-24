@@ -118,3 +118,243 @@ class TestAnnotateStructuredCalls:
                 yield SimpleNamespace(kind="done", sdk_message=None)
 
         assert parent_stream_tool_call_ids(FakeRun()) == {"a"}
+
+    def test_child_agent_ids_on_parent_stream_are_not_parent(self):
+        from types import SimpleNamespace
+
+        from ansible_collections.aknochow.cursor.plugins.module_utils.cursor_client import (
+            annotate_structured_calls,
+            parent_stream_tool_call_ids,
+        )
+
+        class FakeRun:
+            agent_id = "parent-1"
+
+            def events(self):
+                yield SimpleNamespace(
+                    sdk_message=SimpleNamespace(
+                        type="tool_call",
+                        call_id="parent-mcp",
+                        name="mcp",
+                        agent_id="parent-1",
+                    )
+                )
+                yield SimpleNamespace(
+                    sdk_message=SimpleNamespace(
+                        type="tool_call",
+                        call_id="nested-mcp",
+                        name="mcp",
+                        agent_id="child-9",
+                    )
+                )
+
+        ids = parent_stream_tool_call_ids(FakeRun(), parent_agent_id="parent-1")
+        assert ids == {"parent-mcp"}
+        calls = annotate_structured_calls(
+            [{"args": {"from": "lens"}, "tool_call_id": "nested-mcp"}],
+            tool_name="report_findings",
+            parent_agent_id="parent-1",
+            parent_stream_call_ids=ids,
+        )
+        assert calls[0]["caller"] == "nested"
+        assert calls[0]["agent_id"] is None
+
+    def test_stream_notes_observed_child_and_rejects_unseen_id(self):
+        import threading
+        from types import SimpleNamespace
+
+        from ansible_collections.aknochow.cursor.plugins.module_utils.cursor_client import (
+            clear_subagent_custom_tool_fallback,
+            install_subagent_custom_tool_fallback,
+            parent_stream_tool_call_ids,
+        )
+
+        parent_tools = {"report_findings": object()}
+
+        class Server:
+            def __init__(self):
+                self._lock = threading.Lock()
+                self._agents = {"parent-1": parent_tools}
+
+            def _get_tools(self, agent_id):
+                with self._lock:
+                    return self._agents.get(agent_id)
+
+        server = Server()
+        client = SimpleNamespace(
+            _owned_bridge=SimpleNamespace(_tool_callback_server=server),
+            _connect_tool_callback_owner=None,
+            _connect_tool_callback_server=None,
+        )
+
+        class FakeRun:
+            agent_id = "parent-1"
+
+            def events(self):
+                yield SimpleNamespace(
+                    sdk_message=SimpleNamespace(
+                        type="task",
+                        agent_id="child-9",
+                        call_id=None,
+                    )
+                )
+
+        install_subagent_custom_tool_fallback(client, "parent-1")
+        FakeRun.client = client
+        assert parent_stream_tool_call_ids(FakeRun(), parent_agent_id="parent-1") == set()
+        assert server._get_tools("child-9") is parent_tools
+        assert server._get_tools("stale-callback") is None
+        clear_subagent_custom_tool_fallback(client, "parent-1")
+        assert server._get_tools("child-9") is None
+
+
+class TestResultAfterParentStream:
+    def test_exhausted_terminal_handle_does_not_wait(self):
+        from types import SimpleNamespace
+
+        from ansible_collections.aknochow.cursor.plugins.module_utils.cursor_client import (
+            result_after_parent_stream,
+        )
+
+        run = SimpleNamespace(
+            _event_stream=None,
+            _buffer=[],
+            _terminal_result=None,
+            status="finished",
+            result="pong",
+            model=SimpleNamespace(id="grok-4.6"),
+            agent_id="agent-1",
+            id="run-1",
+            duration_ms=10,
+            usage=None,
+        )
+
+        def wait():
+            raise AssertionError("wait() WaitLiveRuns a finished run")
+
+        run.wait = wait
+        got = result_after_parent_stream(run)
+        assert got.status == "finished"
+        assert got.result == "pong"
+        assert got.id == "run-1"
+
+    def test_cached_terminal_result_uses_wait(self):
+        from types import SimpleNamespace
+
+        from ansible_collections.aknochow.cursor.plugins.module_utils.cursor_client import (
+            result_after_parent_stream,
+        )
+
+        cached = SimpleNamespace(status="finished", result="from-wait", id="run-1")
+        run = SimpleNamespace(
+            _event_stream=None,
+            _buffer=[],
+            _terminal_result=cached,
+            status="finished",
+        )
+        run.wait = lambda: cached
+        assert result_after_parent_stream(run) is cached
+
+    def test_still_running_falls_back_to_wait(self):
+        from types import SimpleNamespace
+
+        from ansible_collections.aknochow.cursor.plugins.module_utils.cursor_client import (
+            result_after_parent_stream,
+        )
+
+        waited = SimpleNamespace(status="finished", result="waited")
+        run = SimpleNamespace(
+            _event_stream=object(),
+            _buffer=[],
+            _terminal_result=None,
+            status="running",
+        )
+        run.wait = lambda: waited
+        assert result_after_parent_stream(run) is waited
+
+
+class TestSubagentToolFallback:
+    def test_unknown_child_id_uses_parent_tools(self):
+        import threading
+        from types import SimpleNamespace
+
+        from ansible_collections.aknochow.cursor.plugins.module_utils.cursor_client import (
+            install_subagent_custom_tool_fallback,
+            note_subagent_child,
+            reregister_live_agent_custom_tools,
+            tool_callback_server_of,
+        )
+
+        parent_tools = {"report_findings": object()}
+
+        class Server:
+            def __init__(self):
+                self._lock = threading.Lock()
+                self._agents = {"minted-uuid": parent_tools}
+
+            def register_agent(self, agent_id, tools):
+                self._agents[agent_id] = tools
+
+            def _get_tools(self, agent_id):
+                with self._lock:
+                    return self._agents.get(agent_id)
+
+        server = Server()
+        client = SimpleNamespace(
+            _owned_bridge=SimpleNamespace(_tool_callback_server=server),
+            _connect_tool_callback_owner=None,
+            _connect_tool_callback_server=None,
+        )
+        assert tool_callback_server_of(client) is server
+        reregister_live_agent_custom_tools(client, "live-agent-1", parent_tools)
+        assert server._get_tools("live-agent-1") is parent_tools
+        install_subagent_custom_tool_fallback(client, "live-agent-1")
+        assert server._get_tools("minted-uuid") is parent_tools
+        assert server._get_tools("child-subagent") is None
+        note_subagent_child(client, "live-agent-1", "child-subagent")
+        assert server._get_tools("child-subagent") is parent_tools
+        install_subagent_custom_tool_fallback(client, "live-agent-1")
+        assert server._aknochow_subagent_fallback is True
+
+    def test_unknown_child_stays_on_its_parent_when_another_run_is_first(self):
+        import threading
+        from types import SimpleNamespace
+
+        from ansible_collections.aknochow.cursor.plugins.module_utils.cursor_client import (
+            clear_subagent_custom_tool_fallback,
+            install_subagent_custom_tool_fallback,
+            note_subagent_child,
+        )
+
+        other_tools = {"report_findings": object()}
+        parent_tools = {"report_findings": object()}
+
+        class Server:
+            def __init__(self):
+                self._lock = threading.Lock()
+                self._agents = {}
+
+            def register_agent(self, agent_id, tools):
+                self._agents[agent_id] = tools
+
+            def _get_tools(self, agent_id):
+                with self._lock:
+                    return self._agents.get(agent_id)
+
+        server = Server()
+        server.register_agent("other-run", other_tools)
+        server.register_agent("live-agent-1", parent_tools)
+        client = SimpleNamespace(
+            _owned_bridge=SimpleNamespace(_tool_callback_server=server),
+            _connect_tool_callback_owner=None,
+            _connect_tool_callback_server=None,
+        )
+        install_subagent_custom_tool_fallback(client, "live-agent-1")
+        assert server._get_tools("stale-callback") is None
+        note_subagent_child(client, "live-agent-1", "child-subagent")
+        assert server._get_tools("child-subagent") is parent_tools
+        assert server._get_tools("stale-callback") is None
+        install_subagent_custom_tool_fallback(client, "other-run")
+        assert server._get_tools("child-subagent") is parent_tools
+        clear_subagent_custom_tool_fallback(client, "live-agent-1")
+        assert server._get_tools("child-subagent") is None
