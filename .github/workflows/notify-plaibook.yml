@@ -1,0 +1,17 @@
+name: Notify plaibook pin bump
+
+# ansible-plaibook SHA-pins this collection. GitHub Actions cannot
+# subscribe to another repo's events, so a default-branch push dispatches
+# collection-pin-bump there. PLAIBOOK_DISPATCH_TOKEN is a fine-grained PAT
+# or GitHub App installation token with actions:write on
+# aknochow/ansible-plaibook. Empty secret is a no-op.
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  dispatch:
+    uses: aknochow/ansible-plaibook/.github/workflows/notify-plaibook-pin-bump.yml@main
+    secrets:
+      dispatch_token: ${{ secrets.PLAIBOOK_DISPATCH_TOKEN }}
