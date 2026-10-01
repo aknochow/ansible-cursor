@@ -18,3 +18,8 @@ updates:
       uv-lock:
         patterns:
           - "*"
+        exclude-patterns:
+          - "cursor-sdk"
+      cursor-sdk:
+        patterns:
+          - "cursor-sdk"
