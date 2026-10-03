@@ -61,6 +61,24 @@ From this repo alone: `pip install .`
 Do not upload to PyPI unless a release explicitly says so. Galaxy tarballs
 remain the AAP channel (`ansible-galaxy collection build`).
 
+
+## Branch names
+
+The branch name says what the change is. Use one conventional prefix and a short description:
+
+| Prefix | Use for | Example |
+|---|---|---|
+| `feat/` | a new capability | `feat/commit-range-review` |
+| `fix/` | a bugfix | `fix/spinner-no-wrap` |
+| `docs/` | documentation only | `docs/branch-names` |
+| `test/` | tests only | `test/commit-range` |
+| `chore/` | tooling, dependencies, maintenance | `chore/lockfile` |
+| `refactor/` | a behavior-preserving restructure | `refactor/commit-context` |
+
+Do not name a branch after the tool that opened it. `cursor/`, `claude/`, `codex/`, and any other agent or product prefix do not describe the change. Do not append a generated id (`-1bbb`, `-edab`, and the like) to force the name to be unique.
+
+When a branch name is wrong, rename that branch and leave the existing pull request in place. Do not open a second pull request for the same change.
+
 ## Commit Standards
 
 - Sign off all commits (`git commit -s`).
