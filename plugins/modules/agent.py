@@ -39,6 +39,10 @@ description:
     also accepted so a playbook can attach without C(set_fact) of the token.
     Use C(aknochow.cursor.bridge) to daemonize a sidecar from the playbook
     itself; nested C(launch_bridge) under a Cursor IDE agent is SIGKILL'd.
+  - Starts that share a cwd take an exclusive lock around bridge launch and
+    C(Agent.create) only. A start that fails with C(database is locked),
+    C(Network request failed), or C(resource_exhausted) is retried for about
+    60 seconds. The rest of the run is not locked and is not retried.
 version_added: "0.1.0"
 author:
   - Adam Knochowski (@aknochow)
@@ -266,6 +270,13 @@ effort_param:
       type: str
 """
 
+import fcntl
+import hashlib
+import os
+import random
+import time
+from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 
 from ansible.module_utils.basic import AnsibleModule
@@ -394,15 +405,120 @@ def _build_options(params, AgentOptions, LocalAgentOptions, ModelSelection, Mode
     return AgentOptions(**kwargs), captured, effort_param
 
 
+# Start failures worth a short retry. Anything else fails on the first attempt.
+_START_RETRY_MARKERS = ("database is locked", "Network request failed", "resource_exhausted")
+_START_RETRY_BUDGET_SECONDS = 60.0
+
+
+def _agent_start_lock_path(cwd: str) -> Path:
+    """Lock file for one module cwd. Different checkouts do not share it."""
+    digest = hashlib.sha256(cwd.encode("utf-8")).hexdigest()
+    override = os.environ.get("ANSIBLE_CURSOR_START_LOCK_DIR")
+    if override:
+        base = Path(override)
+    else:
+        base = Path.home() / ".cache" / "ansible-cursor"
+    return base / f"agent-start-{digest}.lock"
+
+
+@contextmanager
+def _exclusive_agent_start_lock(cwd: str):
+    """Serialize bridge launch and Agent.create for this cwd.
+
+    POSIX ``fcntl.flock`` only. The descriptor is closed, and the lock
+    released, when the block exits. Sleep between retries stays outside.
+    """
+    lock_path = _agent_start_lock_path(cwd)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
+def _retryable_start_error(err: BaseException) -> bool:
+    text = str(err)
+    return any(marker in text for marker in _START_RETRY_MARKERS)
+
+
+def _start_backoff_seconds(attempt: int) -> float:
+    base = min(8.0, 0.5 * (2**attempt))
+    return base * (0.5 + 0.5 * random.random())
+
+
+def _close_client(client: Any) -> None:
+    if client is None:
+        return
+    closer = getattr(client, "close", None)
+    if not callable(closer):
+        return
+    try:
+        closer()
+    except Exception:  # noqa: BLE001 — a failed close must not hide the start error
+        pass
+
+
+def _open_client(Client: Any, module: AnsibleModule, attached):
+    if attached:
+        # SDK attach path: sidecar started outside cursor-agent.
+        # Client.connect() does not pass allow_api_key_env_fallback.
+        url, token = attached
+        return Client(
+            base_url=url,
+            auth_token=token,
+            allow_api_key_env_fallback=True,
+        )
+    # Own the bridge: workspace is the caller cwd, not
+    # ansible-playbook's process cwd. close() reaps the vendor
+    # node on both success and start failure.
+    return Client.launch_bridge(
+        workspace=module.params["cwd"],
+        timeout=module.params.get("bridge_timeout") or DEFAULT_BRIDGE_TIMEOUT,
+        allow_api_key_env_fallback=True,
+    )
+
+
+def _start_agent(Agent: Any, Client: Any, options: Any, module: AnsibleModule, attached):
+    """Open a client and Agent.create. Does not send or drain the run.
+
+    The cwd lock covers only that pair. database is locked, Network
+    request failed, and resource_exhausted close the client and retry
+    until about 60 seconds have passed. Any other error is raised as-is.
+    """
+    cwd = module.params["cwd"]
+    deadline = time.monotonic() + _START_RETRY_BUDGET_SECONDS
+    attempt = 0
+    while True:
+        try:
+            with _exclusive_agent_start_lock(cwd):
+                client = None
+                try:
+                    client = _open_client(Client, module, attached)
+                    agent = Agent.create(options, client=client)
+                    return client, agent
+                except Exception:
+                    _close_client(client)
+                    raise
+        except Exception as err:
+            now = time.monotonic()
+            if not _retryable_start_error(err) or now >= deadline:
+                raise
+            delay = min(_start_backoff_seconds(attempt), max(0.0, deadline - now))
+            attempt += 1
+            if delay > 0:
+                time.sleep(delay)
+
+
 def _run_agent(
-    Agent: Any,
+    agent: Any,
     options: Any,
     prompt: str,
     client: Any,
     module: AnsibleModule,
 ) -> tuple[Any, set[str], str | None]:
-    """create + send + drain parent events + terminal result. Never Agent.prompt."""
-    agent = Agent.create(options, client=client)
+    """send + drain parent events + terminal result. Never Agent.prompt."""
     live_id = getattr(agent, "agent_id", None)
     local = getattr(options, "local", None)
     custom_tools = getattr(local, "custom_tools", None) if local is not None else None
@@ -505,26 +621,9 @@ def main():
 
     client = None
     try:
-        if attached:
-            # SDK attach path: sidecar started outside cursor-agent.
-            # Client.connect() does not pass allow_api_key_env_fallback.
-            url, token = attached
-            client = Client(
-                base_url=url,
-                auth_token=token,
-                allow_api_key_env_fallback=True,
-            )
-        else:
-            # Own the bridge: workspace is the caller cwd, not
-            # ansible-playbook's process cwd. close() reaps the vendor
-            # node on both success and start failure.
-            client = Client.launch_bridge(
-                workspace=module.params["cwd"],
-                timeout=module.params.get("bridge_timeout") or DEFAULT_BRIDGE_TIMEOUT,
-                allow_api_key_env_fallback=True,
-            )
+        client, agent = _start_agent(Agent, Client, options, module, attached)
         result, parent_stream_ids, created_agent_id = _run_agent(
-            Agent, options, module.params["prompt"], client, module
+            agent, options, module.params["prompt"], client, module
         )
     except CursorAgentError as err:
         module.fail_json(msg=f"Cursor agent failed to start: {err}")
