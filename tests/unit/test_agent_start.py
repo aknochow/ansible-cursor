@@ -254,7 +254,7 @@ def test_unrelated_start_error_fails_on_the_first_attempt(monkeypatch):
     module = _bind_module(tls, "/tmp/review-other")
     sleeps = []
     if hasattr(agent_module, "time"):
-        monkeypatch.setattr(agent_module.time, "sleep", lambda seconds: sleeps.append(seconds))
+        monkeypatch.setattr(agent_module.time, "sleep", sleeps.append)
     calls = {"launch": 0}
 
     def launch_bridge(**kwargs):
