@@ -37,9 +37,10 @@ _BRIDGE_ENV_KEYS = (
 
 
 @pytest.fixture(autouse=True)
-def _clear_bridge_env(monkeypatch):
+def _clear_bridge_env(monkeypatch, tmp_path):
     for key in _BRIDGE_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("ANSIBLE_CURSOR_START_LOCK_DIR", str(tmp_path / "agent-start-locks"))
 
 
 @pytest.fixture
