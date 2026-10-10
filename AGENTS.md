@@ -1,5 +1,12 @@
 # ansible-cursor: Project Context
 
+## Read first
+
+- [CONTRIBUTING.md](CONTRIBUTING.md): branch names, commits, test and lint commands
+- [README.md](README.md): project overview
+
+## What this repo is
+
 Ansible collection wrapping the official Cursor Python SDK (`cursor-sdk`).
 Two modules: `aknochow.cursor.agent` → `Agent.create` + `send` + parent
 event drain + `wait` (local; not `Agent.prompt`, which drops the stream
@@ -7,7 +14,35 @@ used to classify who invoked a custom tool), and
 `aknochow.cursor.bridge` → playbook-owned daemonized `cursor-sdk-bridge`
 sidecar (`state: present` / `absent`).
 
-## Do not
+## Commands
+
+Test, lint, and sanity commands, copied from [CONTRIBUTING.md](CONTRIBUTING.md):
+
+### Quick test run:
+```bash
+uv run pytest
+```
+
+### Syncing dependencies:
+```bash
+uv sync --extra dev
+uv run pytest -v
+```
+
+### Running lint:
+```bash
+uv run ruff check .
+```
+
+### Running sanity tests:
+Ansible sanity tests require the repository to be within an `ansible_collections/aknochow/cursor` directory hierarchy:
+```bash
+uv run ansible-test sanity --local --python 3.13 -v
+```
+
+## Repo-specific gotchas
+
+### Do not
 
 - Point this at OpenAI `chat.completions` or reuse `aknochow.openai`.
 - Default a model id in `defaults/` or the module. Callers pass `model`.
@@ -34,7 +69,7 @@ sidecar (`state: present` / `absent`).
   repo: the agent still passes `cwd` as `LocalAgentOptions`. The sidecar
   `--workspace` is a dedicated rundir (or caller override).
 
-## Effort vs catalog params
+### Effort vs catalog params
 
 `aknochow.cursor.agent`'s `effort` option is capability metadata. Resolve
 it through `plugins/module_utils/model_params.py` — do not hardcode
@@ -42,7 +77,7 @@ it through `plugins/module_utils/model_params.py` — do not hardcode
 a local/Qwen Chat Completions field, not Cursor). Do not fold output-token
 or tool-turn budgets into this module.
 
-## Tests
+### Tests
 
 ```bash
 uv run pytest
