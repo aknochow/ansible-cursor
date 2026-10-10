@@ -46,7 +46,7 @@ python -m build
 ```
 
 Smoke two collections in one clean venv (no `ANSIBLE_COLLECTIONS_PATH`). From
-the ansible-ai-dev checkout:
+a checkout that contains both collection directories:
 
 ```bash
 python -m venv /tmp/coll-wheels && source /tmp/coll-wheels/bin/activate
@@ -60,6 +60,24 @@ From this repo alone: `pip install .`
 
 Do not upload to PyPI unless a release explicitly says so. Galaxy tarballs
 remain the AAP channel (`ansible-galaxy collection build`).
+
+
+## Branch names
+
+The branch name says what the change is. Use one conventional prefix and a short description:
+
+| Prefix | Use for | Example |
+|---|---|---|
+| `feat/` | a new capability | `feat/commit-range-review` |
+| `fix/` | a bugfix | `fix/spinner-no-wrap` |
+| `docs/` | documentation only | `docs/branch-names` |
+| `test/` | tests only | `test/commit-range` |
+| `chore/` | tooling, dependencies, maintenance | `chore/lockfile` |
+| `refactor/` | a behavior-preserving restructure | `refactor/commit-context` |
+
+Do not name a branch after the tool that opened it. `cursor/`, `claude/`, `codex/`, and any other agent or product prefix do not describe the change. Do not append a generated id (`-1bbb`, `-edab`, and the like) to force the name to be unique.
+
+Name the branch correctly before opening its pull request: renaming a branch closes any open pull request from it. If a pull request is already open on a misnamed branch, leave it and merge it as is. Do not open a second pull request for the same change.
 
 ## Commit Standards
 
