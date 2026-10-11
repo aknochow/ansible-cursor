@@ -1,10 +1,9 @@
 name: Notify plaibook pin bump
 
-# ansible-plaibook SHA-pins this collection. GitHub Actions cannot
-# subscribe to another repo's events, so a default-branch push dispatches
-# collection-pin-bump there. PLAIBOOK_DISPATCH_TOKEN is a fine-grained PAT
-# or GitHub App installation token with actions:write on
-# aknochow/ansible-plaibook. Empty secret is a no-op.
+# ansible-plaibook SHA-pins this collection. A push to main mints a
+# plai-crew installation token in the plaibook-crew environment and
+# passes only that token to the pinned notify workflow. The private
+# key stays in the mint job.
 
 on:
   push:
@@ -13,9 +12,41 @@ on:
 permissions: {}
 
 jobs:
+  mint:
+    name: Mint plai-crew token
+    runs-on: ubuntu-latest
+    environment: plaibook-crew
+    permissions:
+      contents: read
+    outputs:
+      token: ${{ steps.mint.outputs.token }}
+    steps:
+      - name: Check out the token mint
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4.2.2
+        with:
+          repository: aknochow/ansible-plaibook
+          ref: fb40cbe9b7c9d06afc190489bde5f3baf0aacb77
+          sparse-checkout: scripts/github_app_token.py
+          sparse-checkout-cone-mode: false
+
+      - name: Mint a contents-write installation token
+        id: mint
+        env:
+          PLAI_CREW_APP_ID: ${{ vars.PLAI_CREW_APP_ID }}
+          PLAI_CREW_PRIVATE_KEY: ${{ secrets.PLAI_CREW_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          token="$(python3 scripts/github_app_token.py \
+            --repo aknochow/ansible-plaibook \
+            --id-env PLAI_CREW_APP_ID \
+            --key-env PLAI_CREW_PRIVATE_KEY \
+            --permission contents=write)"
+          echo "::add-mask::${token}"
+          echo "token=${token}" >> "$GITHUB_OUTPUT"
+
   dispatch:
-    # Pinned to plaibook main 18557f6. A branch ref would let a later
-    # plaibook main change run with this repo's PLAIBOOK_DISPATCH_TOKEN.
-    uses: aknochow/ansible-plaibook/.github/workflows/notify-plaibook-pin-bump.yml@18557f6491e74c35e2d639a6b85dfa589d88fb9b
+    needs: mint
+    permissions: {}
+    uses: aknochow/ansible-plaibook/.github/workflows/notify-plaibook-pin-bump.yml@fb40cbe9b7c9d06afc190489bde5f3baf0aacb77
     secrets:
-      dispatch_token: ${{ secrets.PLAIBOOK_DISPATCH_TOKEN }}
+      dispatch_token: ${{ needs.mint.outputs.token }}
