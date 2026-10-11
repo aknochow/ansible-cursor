@@ -1,10 +1,9 @@
 name: Notify plaibook pin bump
 
-# ansible-plaibook SHA-pins this collection. GitHub Actions cannot
-# subscribe to another repo's events, so a default-branch push dispatches
-# collection-pin-bump there. PLAIBOOK_DISPATCH_TOKEN is a fine-grained PAT
-# or GitHub App installation token with actions:write on
-# aknochow/ansible-plaibook. Empty secret is a no-op.
+# A push to main mints a plai-crew installation token and dispatches the
+# pin bump in the same job. The token is not a job output: GitHub drops
+# outputs whose values were registered as secret masks, and the reusable
+# workflow would then see an empty token and skip the dispatch.
 
 on:
   push:
@@ -14,8 +13,41 @@ permissions: {}
 
 jobs:
   dispatch:
-    # Pinned to plaibook main 18557f6. A branch ref would let a later
-    # plaibook main change run with this repo's PLAIBOOK_DISPATCH_TOKEN.
-    uses: aknochow/ansible-plaibook/.github/workflows/notify-plaibook-pin-bump.yml@18557f6491e74c35e2d639a6b85dfa589d88fb9b
-    secrets:
-      dispatch_token: ${{ secrets.PLAIBOOK_DISPATCH_TOKEN }}
+    name: Dispatch plaibook pin bump
+    runs-on: ubuntu-latest
+    environment: plaibook-crew
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the token mint
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4.2.2
+        with:
+          repository: aknochow/ansible-plaibook
+          ref: b6c0b2df43e2818aa70f9640a0f91276a8802d2b
+          sparse-checkout: scripts/github_app_token.py
+          sparse-checkout-cone-mode: false
+
+      - name: Mint a token and dispatch the pin bump
+        env:
+          PLAI_CREW_APP_ID: ${{ vars.PLAI_CREW_APP_ID }}
+          PLAI_CREW_PRIVATE_KEY: ${{ secrets.PLAI_CREW_PRIVATE_KEY }}
+          SOURCE_REPO: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+          SOURCE_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          token="$(python3 scripts/github_app_token.py \
+            --repo aknochow/ansible-plaibook \
+            --id-env PLAI_CREW_APP_ID \
+            --key-env PLAI_CREW_PRIVATE_KEY \
+            --permission contents=write)"
+          if [ -z "$token" ]; then
+            echo "plai-crew token is empty" >&2
+            exit 1
+          fi
+          echo "::add-mask::${token}"
+          GH_TOKEN="${token}" gh api repos/aknochow/ansible-plaibook/dispatches \
+            -f event_type=collection-pin-bump \
+            -f "client_payload[repository]=${SOURCE_REPO}" \
+            -f "client_payload[sha]=${SOURCE_SHA}" \
+            -f "client_payload[ref]=${SOURCE_REF}"
