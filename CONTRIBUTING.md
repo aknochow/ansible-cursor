@@ -81,6 +81,8 @@ Name the branch correctly before opening its pull request: renaming a branch clo
 
 ## Commit Standards
 
-- Sign off all commits (`git commit -s`).
-- Include AI assistance attribution via trailer when applicable:
-  `Assisted-by: <model>` (never `Co-Authored-By:`).
+Sign every commit with `git commit -s`. That adds the DCO `Signed-off-by` trailer with your name and email.
+
+Sign the commit with your own SSH or GPG key if you want GitHub to show it as Verified. The key and the committer email need to belong to your GitHub account.
+
+If a tool wrote the change, add one trailer, `Assisted-by: Tool (model)`, naming the tool and model that did the work. Do not add `Co-authored-by`.
