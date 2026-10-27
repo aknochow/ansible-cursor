@@ -41,8 +41,9 @@ description:
     itself; nested C(launch_bridge) under a Cursor IDE agent is SIGKILL'd.
   - Starts that share a cwd take an exclusive lock around bridge launch and
     C(Agent.create) only. A start that fails with C(database is locked),
-    C(Network request failed), or C(resource_exhausted) is retried for about
-    60 seconds. The rest of the run is not locked and is not retried.
+    C(Network request failed), C(resource_exhausted), or
+    C(RemoteProtocolError) is retried for about 60 seconds. The rest of the
+    run is not locked and is not retried.
 version_added: "0.1.0"
 author:
   - Adam Knochowski (@aknochow)
@@ -405,8 +406,16 @@ def _build_options(params, AgentOptions, LocalAgentOptions, ModelSelection, Mode
     return AgentOptions(**kwargs), captured, effort_param
 
 
-# Start failures worth a short retry. Anything else fails on the first attempt.
-_START_RETRY_MARKERS = ("database is locked", "Network request failed", "resource_exhausted")
+# Start failures worth a short retry. Match these exact strings.
+# RemoteProtocolError is the bridge dropping the connection while the
+# agent is still starting; do not match a broad substring such as
+# "connection". Anything else fails on the first attempt.
+_START_RETRY_MARKERS = (
+    "database is locked",
+    "Network request failed",
+    "resource_exhausted",
+    "RemoteProtocolError",
+)
 _START_RETRY_BUDGET_SECONDS = 60.0
 
 
@@ -484,8 +493,9 @@ def _start_agent(Agent: Any, Client: Any, options: Any, module: AnsibleModule, a
     """Open a client and Agent.create. Does not send or drain the run.
 
     The cwd lock covers only that pair. database is locked, Network
-    request failed, and resource_exhausted close the client and retry
-    until about 60 seconds have passed. Any other error is raised as-is.
+    request failed, resource_exhausted, and RemoteProtocolError close
+    the client and retry until about 60 seconds have passed. Any other
+    error is raised as-is.
     """
     cwd = module.params["cwd"]
     deadline = time.monotonic() + _START_RETRY_BUDGET_SECONDS
