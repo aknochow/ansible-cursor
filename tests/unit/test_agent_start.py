@@ -206,6 +206,8 @@ def test_different_cwd_starts_are_not_serialized(monkeypatch):
         ("internal: database is locked", "create"),
         ("Network request failed", "launch"),
         ("resource_exhausted", "create"),
+        ("RemoteProtocolError: the server closed the connection", "launch"),
+        ("RemoteProtocolError: the server closed the connection", "create"),
     ],
 )
 def test_retryable_start_error_then_succeeds(monkeypatch, message, where):
@@ -249,7 +251,14 @@ def test_retryable_start_error_then_succeeds(monkeypatch, message, where):
         assert closed, "the client from the failed start was not closed"
 
 
-def test_unrelated_start_error_fails_on_the_first_attempt(monkeypatch):
+@pytest.mark.parametrize(
+    "message",
+    [
+        "model is not available",
+        "the server closed the connection",
+    ],
+)
+def test_unrelated_start_error_fails_on_the_first_attempt(monkeypatch, message):
     agent_module, tls, mock_sdk = _install(monkeypatch)
     module = _bind_module(tls, "/tmp/review-other")
     sleeps = []
@@ -262,7 +271,7 @@ def test_unrelated_start_error_fails_on_the_first_attempt(monkeypatch):
         return MagicMock()
 
     def create(options, client=None):
-        raise mock_sdk.CursorAgentError("model is not available")
+        raise mock_sdk.CursorAgentError(message)
 
     mock_sdk.Client.launch_bridge.side_effect = launch_bridge
     mock_sdk.Agent.create.side_effect = create
@@ -271,10 +280,17 @@ def test_unrelated_start_error_fails_on_the_first_attempt(monkeypatch):
     assert sleeps == []
     module.exit_json.assert_not_called()
     module.fail_json.assert_called_once()
-    assert module.fail_json.call_args.kwargs["msg"] == "Cursor agent failed to start: model is not available"
+    assert module.fail_json.call_args.kwargs["msg"] == f"Cursor agent failed to start: {message}"
 
 
-def test_retry_gives_up_after_the_time_budget_with_the_original_message(monkeypatch):
+@pytest.mark.parametrize(
+    "message",
+    [
+        "internal: database is locked",
+        "RemoteProtocolError: the server closed the connection",
+    ],
+)
+def test_retry_gives_up_after_the_time_budget_with_the_original_message(monkeypatch, message):
     agent_module, tls, mock_sdk = _install(monkeypatch)
     module = _bind_module(tls, "/tmp/review-budget")
     clock = {"t": 1_000.0, "sleeps": []}
@@ -292,16 +308,14 @@ def test_retry_gives_up_after_the_time_budget_with_the_original_message(monkeypa
 
     def launch_bridge(**kwargs):
         calls["launch"] += 1
-        raise mock_sdk.CursorAgentError("internal: database is locked")
+        raise mock_sdk.CursorAgentError(message)
 
     mock_sdk.Client.launch_bridge.side_effect = launch_bridge
     mock_sdk.Agent.create.side_effect = lambda options, client=None: _agent(mock_sdk)
     agent_module.main()
     module.exit_json.assert_not_called()
     module.fail_json.assert_called_once()
-    assert module.fail_json.call_args.kwargs["msg"] == (
-        "Cursor agent failed to start: internal: database is locked"
-    )
+    assert module.fail_json.call_args.kwargs["msg"] == f"Cursor agent failed to start: {message}"
     assert calls["launch"] >= 2
     assert clock["sleeps"]
     assert sum(clock["sleeps"]) == pytest.approx(60.0)
