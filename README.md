@@ -156,6 +156,7 @@ sends `thinking`, `fast`, `context`, or `enable_thinking`.
 
 | Example id | `effort: high` becomes |
 |---|---|
+| `grok-4.7` | `reasoning_effort=high` (also allows `xhigh`) |
 | `grok-4.6` | `effort=high` (also allows `xhigh`) |
 | `grok-4.5` | `effort=high` (`xhigh` is rejected) |
 | `gpt-5.6-luna` | `reasoning=high` |
@@ -163,5 +164,6 @@ sends `thinking`, `fast`, `context`, or `enable_thinking`.
 | `composer-2.5` | omitted |
 
 The matrix lives in `plugins/module_utils/model_params.py` (snapshot of
-`Cursor.models.list()` on 2026-09-09). Token, timeout, and retry budgets
-stay out of this module; plaibook owns those per pass.
+`Cursor.models.list()` on 2026-09-09; `grok-4.7` confirmed 2026-10-29).
+Token, timeout, and retry budgets stay out of this module; plaibook owns
+those per pass.

@@ -728,6 +728,24 @@ class TestMain:
         assert model.params[0].id == "reasoning"
         assert model.params[0].value == "high"
 
+    def test_grok_47_high_sends_reasoning_effort(self, monkeypatch):
+        params = self._base_params(model="grok-4.7", effort="high")
+        agent_module, fake_module = self._install(monkeypatch, params, self._finished("grok-4.7"))
+        agent_module.main()
+        kwargs = fake_module.exit_json.call_args.kwargs
+        assert kwargs["effort_param"] == {"id": "reasoning_effort", "value": "high"}
+        sent = fake_module.prompt_options[0].model.params[0]
+        assert sent.id == "reasoning_effort"
+        assert sent.value == "high"
+
+    def test_grok_46_high_still_sends_effort(self, monkeypatch):
+        params = self._base_params(model="grok-4.6", effort="high")
+        agent_module, fake_module = self._install(monkeypatch, params, self._finished("grok-4.6"))
+        agent_module.main()
+        kwargs = fake_module.exit_json.call_args.kwargs
+        assert kwargs["effort_param"] == {"id": "effort", "value": "high"}
+        assert fake_module.prompt_options[0].model.params[0].id == "effort"
+
     def test_gemini_38_high_sends_reasoning_effort(self, monkeypatch):
         params = self._base_params(model="gemini-3.8-flash", effort="high")
         agent_module, fake_module = self._install(
