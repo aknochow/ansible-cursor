@@ -18,17 +18,33 @@ class TestResolveEffortParam:
         assert resolve_effort_param("grok-4.6", None) is None
         assert resolve_effort_param("grok-4.6", "") is None
 
+    def test_grok_47_sends_reasoning_effort(self):
+        assert resolve_effort_param("grok-4.7", "high") == (
+            PARAM_REASONING_EFFORT,
+            "high",
+        )
+        assert resolve_effort_param("grok-4.7", "xhigh") == (
+            PARAM_REASONING_EFFORT,
+            "xhigh",
+        )
+        assert resolve_effort_param("grok-4.7", "extra-high") == (
+            PARAM_REASONING_EFFORT,
+            "xhigh",
+        )
+
     def test_grok_46_sends_effort(self):
         assert resolve_effort_param("grok-4.6", "high") == (PARAM_EFFORT, "high")
         assert resolve_effort_param("grok-4.6", "xhigh") == (PARAM_EFFORT, "xhigh")
 
-    def test_grok_45_rejects_xhigh(self):
+    def test_grok_45_sends_effort_and_rejects_xhigh(self):
+        assert resolve_effort_param("grok-4.5", "high") == (PARAM_EFFORT, "high")
         with pytest.raises(UnsupportedEffortValue, match="grok-4.5"):
             resolve_effort_param("grok-4.5", "xhigh")
 
     def test_grok_cannot_disable_reasoning(self):
-        with pytest.raises(UnsupportedEffortValue, match="none"):
-            resolve_effort_param("grok-4.6", "none")
+        for model_id in ("grok-4.7", "grok-4.6", "grok-4.5"):
+            with pytest.raises(UnsupportedEffortValue, match="none"):
+                resolve_effort_param(model_id, "none")
 
     def test_luna_maps_to_reasoning(self):
         assert resolve_effort_param("gpt-5.6-luna", "high") == (PARAM_REASONING, "high")
@@ -79,12 +95,18 @@ class TestResolveEffortParam:
         assert resolve_effort_param("gpt-5.7-preview", "high") == (PARAM_REASONING, "high")
 
     def test_unknown_grok_uses_effort_intersection(self):
-        assert resolve_effort_param("grok-4.7", "high") == (PARAM_EFFORT, "high")
+        assert resolve_effort_param("grok-4.8", "high") == (PARAM_EFFORT, "high")
         with pytest.raises(UnsupportedEffortValue):
-            resolve_effort_param("grok-4.7", "xhigh")
+            resolve_effort_param("grok-4.8", "xhigh")
 
     def test_never_uses_thinking_or_enable_thinking(self):
-        for model_id in ("grok-4.6", "gpt-5.6-luna", "gemini-3.8-flash", "claude-haiku-4-5"):
+        for model_id in (
+            "grok-4.7",
+            "grok-4.6",
+            "gpt-5.6-luna",
+            "gemini-3.8-flash",
+            "claude-haiku-4-5",
+        ):
             cap = capability_for(model_id)
             if cap is None:
                 continue

@@ -8,8 +8,11 @@ is in the catalog allow-list. Never send `thinking`, `fast`, `context`, or
 `enable_thinking` belongs to local/Qwen adapters, not Cursor).
 
 Catalog snapshot: Cursor.models.list() on 2026-09-09 for a Cursor Pro key.
-Exact ids win. Prefix fallbacks cover newer grok-*/gpt-*/gemini-3.8-* ids
-without guessing Claude (some Claude ids have no effort param).
+grok-4.7 was probed again on 2026-10-29 and exposes ``reasoning_effort``
+(low/medium/high/xhigh), not ``effort``. Exact ids win. Prefix fallbacks
+cover newer grok-*/gpt-*/gemini-3.8-* ids without guessing Claude (some
+Claude ids have no effort param). Unknown grok-* still falls back to
+``effort`` because grok-4.6 and grok-4.5 expose that param.
 """
 
 from __future__ import annotations
@@ -50,8 +53,10 @@ def _cap(param_id: str, *values: str) -> EffortCapability:
     return EffortCapability(param_id, frozenset(values))
 
 
-# Exact ids from the 2026-09-09 catalog that expose an effort-like param.
+# Exact ids from the 2026-09-09 catalog that expose an effort-like param,
+# plus grok-4.7 from the 2026-10-29 probe (reasoning_effort, not effort).
 CAPABILITIES: dict[str, EffortCapability] = {
+    "grok-4.7": _cap(PARAM_REASONING_EFFORT, "low", "medium", "high", "xhigh"),
     "grok-4.6": _cap(PARAM_EFFORT, "low", "medium", "high", "xhigh"),
     "grok-4.5": _cap(PARAM_EFFORT, "low", "medium", "high"),
     "claude-opus-5": _cap(PARAM_EFFORT, "low", "medium", "high", "xhigh", "max"),
@@ -119,6 +124,8 @@ def _prefix_capability(model_id: str) -> EffortCapability | None:
     Claude is omitted on purpose: several Claude ids have no effort param.
     """
     if model_id.startswith("grok-"):
+        # grok-4.7 is an exact id above. Do not guess reasoning_effort here:
+        # grok-4.6 and grok-4.5 still list `effort`.
         return _cap(PARAM_EFFORT, "low", "medium", "high")
     if model_id.startswith("gpt-"):
         return _cap(PARAM_REASONING, "low", "medium", "high")
